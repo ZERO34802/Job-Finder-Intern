@@ -115,19 +115,24 @@ async function pollOne(store: Store, target: Target, summary: PollSummary, found
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     summary.errors.push({ targetId: target.id, error: message });
-    await store.touchTarget(target.id, "error", message.slice(0, 500), QUIET_MINUTES);
-    // A board that is gone or a bad link guessed from a list (Workday answers 422) is switched off.
-    if (err instanceof SourceError && (err.status === 404 || err.status === 422)) {
-      await store.setTargetEnabled(target.id, false);
+    // Bookkeeping for a failed board must not stop the other boards from being polled.
+    try {
+      await store.touchTarget(target.id, "error", message.slice(0, 500), QUIET_MINUTES);
+      // A board that is gone or a bad link guessed from a list (Workday answers 422) is switched off.
+      if (err instanceof SourceError && (err.status === 404 || err.status === 422)) {
+        await store.setTargetEnabled(target.id, false);
+      }
+      await store.recordRun({
+        targetId: target.id,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        jobsSeen: 0,
+        jobsNew: 0,
+        error: message.slice(0, 500),
+      });
+    } catch (bookkeeping) {
+      summary.errors.push({ targetId: target.id, error: `while recording the error: ${String(bookkeeping)}` });
     }
-    await store.recordRun({
-      targetId: target.id,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      jobsSeen: 0,
-      jobsNew: 0,
-      error: message.slice(0, 500),
-    });
   }
 }
 
@@ -170,11 +175,21 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
       await pollOne(store, lane[i], summary, found);
     }
   });
+  // A failure in any step below is recorded and the run moves on, so one bad request
+  // cannot cost the run its alerts.
+  const step = async (name: string, work: () => Promise<void>) => {
+    try {
+      await work();
+    } catch (err) {
+      summary.errors.push({ targetId: name, error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+
   // New boards are polled from the next run on, starting with a quiet baseline.
-  if (found.length > 0) summary.discovered = await store.addTargets(found);
+  if (found.length > 0) await step("discovery", async () => void (summary.discovered = await store.addTargets(found)));
 
   const providers = await llmProviders();
-  summary.classified = await evaluateJobs(store, envInt("EVALUATE_LIMIT", 1000), providers);
+  await step("labelling", async () => void (summary.classified = await evaluateJobs(store, envInt("EVALUATE_LIMIT", 1000), providers)));
 
   if (process.env.DISCORD_WEBHOOK_URL?.trim()) {
     try {

@@ -115,6 +115,27 @@ function mapTarget(row: Record<string, unknown>): Target {
   };
 }
 
+// Values for .in() filters travel in the URL, and requests past about 16 KB fail
+// ("fetch failed" or 400). Long titles hit that at 200 keys, so lookups are batched
+// by encoded length as well as count.
+function keyChunks(values: string[], maxChars = 6000, maxItems = 200): string[][] {
+  const out: string[][] = [];
+  let batch: string[] = [];
+  let size = 0;
+  for (const value of values) {
+    const cost = encodeURIComponent(value).length + 3;
+    if (batch.length > 0 && (size + cost > maxChars || batch.length >= maxItems)) {
+      out.push(batch);
+      batch = [];
+      size = 0;
+    }
+    batch.push(value);
+    size += cost;
+  }
+  if (batch.length > 0) out.push(batch);
+  return out;
+}
+
 function chunks<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -215,7 +236,7 @@ export function createSupabaseStore(): Store {
         });
       }
       const existing = new Set<string>();
-      for (const chunk of chunks([...rows.keys()], 200)) {
+      for (const chunk of keyChunks([...rows.keys()])) {
         const { data, error } = await db.from("targets").select("id").in("id", chunk);
         fail(error);
         for (const row of data ?? []) existing.add(row.id as string);
@@ -269,26 +290,26 @@ export function createSupabaseStore(): Store {
 
       const byId = new Map<string, JobRow>();
       const byUrl = new Map<string, JobRow>();
-      for (const chunk of chunks([...entries.keys()], 200)) {
+      for (const chunk of keyChunks([...entries.keys()])) {
         const { data, error } = await db.from("jobs").select("*").in("id", chunk);
         fail(error);
         for (const row of (data ?? []) as JobRow[]) byId.set(row.id, row);
       }
-      for (const chunk of chunks([...entryByUrl.keys()], 50)) {
+      for (const chunk of keyChunks([...entryByUrl.keys()])) {
         const { data, error } = await db.from("jobs").select("*").in("canonical_url", chunk);
         fail(error);
         for (const row of (data ?? []) as JobRow[]) byUrl.set(row.canonical_url, row);
       }
       const byPosting = new Map<string, JobRow>();
       const postings = [...new Set([...entries.values()].flatMap((entry) => (entry.posting ? [entry.posting] : [])))];
-      for (const chunk of chunks(postings, 200)) {
+      for (const chunk of keyChunks(postings)) {
         const { data, error } = await db.from("jobs").select("*").in("posting_key", chunk);
         fail(error);
         for (const row of (data ?? []) as JobRow[]) if (row.posting_key) byPosting.set(row.posting_key, row);
       }
       const byRole = new Map<string, JobRow>();
       const roles = [...new Set([...entries.values()].filter((entry) => entry.draft.looseMatch).map((entry) => entry.role))];
-      for (const chunk of chunks(roles, 200)) {
+      for (const chunk of keyChunks(roles)) {
         const { data, error } = await db.from("jobs").select("*").in("role_key", chunk);
         fail(error);
         for (const row of (data ?? []) as JobRow[]) if (row.role_key) byRole.set(row.role_key, row);
@@ -392,7 +413,7 @@ export function createSupabaseStore(): Store {
         groups.set(key, group);
       }
       for (const { fields, ids } of groups.values()) {
-        for (const chunk of chunks(ids, 200)) {
+        for (const chunk of keyChunks(ids)) {
           const { error } = await db.from("jobs").update(fields).in("id", chunk);
           fail(error);
         }
@@ -400,7 +421,7 @@ export function createSupabaseStore(): Store {
     },
     async getClassifications(cacheKeys) {
       const found = new Map<string, Classification>();
-      for (const chunk of chunks(cacheKeys, 200)) {
+      for (const chunk of keyChunks(cacheKeys)) {
         const { data, error } = await db.from("classifications").select("*").in("cache_key", chunk);
         fail(error);
         for (const row of data ?? []) {
@@ -443,7 +464,7 @@ export function createSupabaseStore(): Store {
     },
     async getLocations(cacheKeys) {
       const found = new Map<string, LocationVerdict>();
-      for (const chunk of chunks(cacheKeys, 200)) {
+      for (const chunk of keyChunks(cacheKeys)) {
         const { data, error } = await db.from("locations").select("*").in("cache_key", chunk);
         fail(error);
         for (const row of data ?? []) {
