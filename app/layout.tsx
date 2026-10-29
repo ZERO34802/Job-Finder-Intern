@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Fraunces, IBM_Plex_Sans } from "next/font/google";
 import { Nav } from "@/components/Nav";
-import { ollamaStatus } from "@/lib/classify";
 import "./globals.css";
 
 const sans = IBM_Plex_Sans({ subsets: ["latin"], weight: ["400", "500", "600"], variable: "--font-sans" });
@@ -15,10 +14,8 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const ollama = await ollamaStatus();
+  // Polling, labelling, and alerts run in the poller (GitHub Actions), not here.
   const store = process.env.STORE === "supabase" ? "Supabase" : "SQLite on this Mac";
-  const classifier = ollama.ok ? ollama.model : `rules (${ollama.reason})`;
-  const discord = process.env.DISCORD_WEBHOOK_URL ? "Discord on" : "Discord off";
   return (
     <html lang="en" className={`${sans.variable} ${display.variable}`}>
       <body>
@@ -31,7 +28,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </header>
           {children}
           <p className="statusline">
-            {store} · classifier {classifier} · {discord}
+            {store}
           </p>
         </div>
       </body>

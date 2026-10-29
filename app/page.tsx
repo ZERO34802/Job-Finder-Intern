@@ -14,24 +14,24 @@ export default async function HomePage() {
   const store = getStore();
   const [stats, jobs] = await Promise.all([
     store.stats(),
-    store.listJobs({ earlyOnly: true, limit: 8 }),
+    store.listJobs({ matchOnly: true, limit: 8 }),
   ]);
   return (
     <main>
       <p className="lede">
-        Polls public Greenhouse, Lever, and Workday boards, sorts titles with Qwen when Ollama is running, and keeps one row when the same role shows up from more than one source.
+        Polls public Greenhouse, Lever, and Workday boards for internships. A match is a Summer 2027 software, ML, or data internship in the US that is open to undergrad or master&apos;s students.
       </p>
       <section className="stats">
         <div className="stat"><b>{stats.targetsEnabled}</b><span>boards enabled of {stats.targets}</span></div>
         <div className="stat"><b>{stats.jobs}</b><span>roles saved</span></div>
-        <div className="stat"><b>{stats.earlyCareer}</b><span>intern and new-grad matches</span></div>
+        <div className="stat"><b>{stats.matches}</b><span>matches</span></div>
         <div className="stat"><b>{stats.applications}</b><span>applications tracked</span></div>
       </section>
       <PollButton label="Poll all boards" primary />
       <div className="split">
         <section className="table-wrap">
           {jobs.length === 0 ? (
-            <div className="empty">No early-career matches yet. Add boards, then poll one.</div>
+            <div className="empty">No matches yet. Add boards, then poll one.</div>
           ) : (
             <table>
               <thead>

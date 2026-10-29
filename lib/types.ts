@@ -1,8 +1,16 @@
 export const ATS = ["greenhouse", "lever", "workday"] as const;
 export type Ats = (typeof ATS)[number];
 
-export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "product", "design", "other"] as const;
+export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "hardware", "quant", "product", "design", "other"] as const;
 export type RoleFamily = (typeof ROLE_FAMILIES)[number];
+// The families this search is for.
+export const TARGET_FAMILIES: readonly RoleFamily[] = ["swe", "ml", "data"];
+
+export const SEASONS = ["summer_2027", "unspecified", "other"] as const;
+export type Season = (typeof SEASONS)[number];
+
+export const DEGREES = ["any", "phd_only", "mba_only"] as const;
+export type Degree = (typeof DEGREES)[number];
 
 export const SENIORITIES = ["intern", "new_grad", "other"] as const;
 export type Seniority = (typeof SENIORITIES)[number];
@@ -84,12 +92,16 @@ export type Job = {
   score: number | null;
   classifyReason: string | null;
   classifyModel: string | null;
+  season: string | null;
+  degree: string | null;
+  us: boolean | null;
+  match: boolean | null;
   alertedAt: string | null;
 };
 
 export type JobFilter = {
   q?: string;
-  earlyOnly?: boolean;
+  matchOnly?: boolean;
   family?: string;
   limit?: number;
 };
@@ -100,6 +112,30 @@ export type Classification = {
   isIntern: boolean;
   roleFamily: RoleFamily;
   seniority: Seniority;
+  season: Season;
+  degree: Degree;
+  score: number;
+  reason: string;
+  model: string;
+};
+
+// Whether a location string is in the US. Only model answers are cached; rules are recomputed.
+export type LocationVerdict = {
+  cacheKey: string;
+  location: string;
+  us: boolean | null;
+  model: string;
+};
+
+export type JobEvaluation = {
+  id: string;
+  isIntern: boolean;
+  roleFamily: RoleFamily;
+  seniority: Seniority;
+  season: Season;
+  degree: Degree;
+  us: boolean | null;
+  match: boolean;
   score: number;
   reason: string;
   model: string;
@@ -134,7 +170,7 @@ export type Stats = {
   targets: number;
   targetsEnabled: number;
   jobs: number;
-  earlyCareer: number;
+  matches: number;
   applications: number;
   recentRuns: PollRun[];
 };
@@ -148,12 +184,14 @@ export interface Store {
   touchTarget(id: string, status: string, error: string | null): Promise<void>;
   upsertJobs(jobs: JobDraft[]): Promise<{ insertedIds: string[] }>;
   listJobs(filter: JobFilter): Promise<Job[]>;
-  titlesForIds(ids: string[]): Promise<string[]>;
-  titlesNeedingClassification(limit: number): Promise<string[]>;
+  // Unevaluated jobs first; with upgradeRules, also jobs last judged by rules only.
+  jobsNeedingEvaluation(opts: { limit: number; upgradeRules: boolean }): Promise<Job[]>;
+  saveEvaluations(rows: JobEvaluation[]): Promise<void>;
   getClassifications(cacheKeys: string[]): Promise<Map<string, Classification>>;
-  putClassification(row: Classification): Promise<void>;
-  applyClassifications(cacheKeys?: string[]): Promise<void>;
-  listUnalertedMatches(opts: { sinceHours: number; limit: number; minScore: number }): Promise<Job[]>;
+  putClassifications(rows: Classification[]): Promise<void>;
+  getLocations(cacheKeys: string[]): Promise<Map<string, LocationVerdict>>;
+  putLocations(rows: LocationVerdict[]): Promise<void>;
+  listUnalertedMatches(opts: { sinceHours: number; limit: number }): Promise<Job[]>;
   markAlerted(ids: string[]): Promise<void>;
   listApplications(): Promise<Application[]>;
   upsertApplication(input: ApplicationInput): Promise<Application>;

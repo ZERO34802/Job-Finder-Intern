@@ -42,13 +42,23 @@ create table if not exists jobs (
   score double precision,
   classify_reason text,
   classify_model text,
+  season text,
+  degree text,
+  us integer,
+  match integer,
   alerted_at timestamptz
 );
+
+alter table jobs add column if not exists season text;
+alter table jobs add column if not exists degree text;
+alter table jobs add column if not exists us integer;
+alter table jobs add column if not exists match integer;
 
 create index if not exists jobs_title_key_idx on jobs (title_key);
 create index if not exists jobs_first_seen_idx on jobs (first_seen_at desc);
 create index if not exists jobs_score_idx on jobs (score desc);
 create index if not exists jobs_classify_model_idx on jobs (classify_model);
+create index if not exists jobs_match_idx on jobs (match);
 
 create table if not exists classifications (
   cache_key text primary key,
@@ -56,11 +66,29 @@ create table if not exists classifications (
   is_intern integer not null,
   role_family text not null,
   seniority text not null,
+  season text,
+  degree text,
   score double precision not null,
   reason text not null,
   model text not null,
   created_at timestamptz not null default now()
 );
+
+alter table classifications add column if not exists season text;
+alter table classifications add column if not exists degree text;
+
+-- Model answers for "is this location in the US?", one row per location string.
+create table if not exists locations (
+  cache_key text primary key,
+  location text not null,
+  us integer,
+  model text not null,
+  created_at timestamptz not null default now()
+);
+
+-- Titles labelled before season and degree existed get labelled again.
+delete from classifications where season is null;
+update jobs set classify_model = null where match is null and classify_model is not null;
 
 create table if not exists applications (
   job_id text primary key references jobs (id) on delete cascade,
@@ -88,3 +116,4 @@ alter table jobs enable row level security;
 alter table classifications enable row level security;
 alter table applications enable row level security;
 alter table poll_runs enable row level security;
+alter table locations enable row level security;

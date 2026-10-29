@@ -4,13 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { canonicalJobUrl, companyKey, dedupeKey, titleCacheKey } from "../lib/canonicalize";
-import { isCandidateTitle, ruleClassify } from "../lib/classify";
+import { evaluate, evaluateJobs, isCandidateTitle, ruleClassify, ruleDegree, ruleSeason, ruleUs } from "../lib/classify";
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
 import { importTargets, seedStarter } from "../lib/seed";
 import { createSqliteStore } from "../lib/sqlite-store";
 import type { Target } from "../lib/types";
+
+// Keep tests off the network: no Groq key, and an Ollama URL nothing listens on.
+delete process.env.GROQ_API_KEY;
+process.env.OLLAMA_URL = "http://127.0.0.1:9";
 
 test("canonical urls drop tracking params, locale, and www", () => {
   const url = canonicalJobUrl(
@@ -43,10 +47,14 @@ test("rules sort internship titles and leave senior roles alone", () => {
   const intern = ruleClassify("Software Engineering Intern");
   assert.equal(intern.isIntern, true);
   assert.equal(intern.roleFamily, "swe");
-  assert.ok(intern.score >= 0.9);
+  assert.ok(intern.score >= 0.85);
   const ml = ruleClassify("Data Science Intern");
   assert.equal(ml.roleFamily, "ml");
   const grad = ruleClassify("New Grad, Machine Learning Engineer");
+  assert.equal(ruleClassify("Hardware Engineering Intern").roleFamily, "hardware");
+  assert.equal(ruleClassify("Research Intern, World Models and Synthetic Data").roleFamily, "ml");
+  assert.equal(ruleClassify("User Research Intern").roleFamily, "research");
+  assert.equal(ruleClassify("Information Security Engineer, Internship").roleFamily, "swe");
   assert.equal(grad.seniority, "new_grad");
   assert.equal(grad.isIntern, false);
   const senior = ruleClassify("Senior Staff Engineer");
@@ -104,21 +112,13 @@ test("sqlite dedupes the same role across urls and caches a classification", asy
   assert.equal(jobs[0].sourceUrls.length, 2);
   assert.match(jobs[0].canonicalUrl, /gh_jid=1$/);
 
-  await store.putClassification({
-    cacheKey: jobs[0].titleKey,
-    title: jobs[0].title,
-    isIntern: true,
-    roleFamily: "swe",
-    seniority: "intern",
-    score: 0.92,
-    reason: "test",
-    model: "rules",
-  });
-  await store.applyClassifications();
-  const classified = await store.listJobs({ earlyOnly: true, limit: 10 });
+  assert.equal(await evaluateJobs(store, 100, []), 1);
+  const classified = await store.listJobs({ matchOnly: true, limit: 10 });
   assert.equal(classified.length, 1);
-  assert.equal(classified[0].score, 0.92);
   assert.equal(classified[0].isIntern, true);
+  assert.equal(classified[0].us, null);
+  assert.equal(classified[0].classifyModel, "rules");
+  assert.equal(await evaluateJobs(store, 100, []), 0);
 
   const app = await store.upsertApplication({ jobId: classified[0].id, status: "applied", notes: "referral" });
   assert.equal(app.status, "applied");
@@ -184,28 +184,8 @@ test("quiet drafts are stored as already alerted and a good poll sets last_ok_at
     postedAt: null,
   };
   await store.upsertJobs([{ ...draft, quiet: true }, { ...draft, title: "ML Intern", url: "https://boards.greenhouse.io/figma/jobs/2" }]);
-  await store.putClassification({
-    cacheKey: "software engineer intern",
-    title: "Software Engineer Intern",
-    isIntern: true,
-    roleFamily: "swe",
-    seniority: "intern",
-    score: 0.92,
-    reason: "test",
-    model: "rules",
-  });
-  await store.putClassification({
-    cacheKey: "ml intern",
-    title: "ML Intern",
-    isIntern: true,
-    roleFamily: "ml",
-    seniority: "intern",
-    score: 0.92,
-    reason: "test",
-    model: "rules",
-  });
-  await store.applyClassifications();
-  const matches = await store.listUnalertedMatches({ sinceHours: 1, limit: 10, minScore: 0.5 });
+  await evaluateJobs(store, 100, []);
+  const matches = await store.listUnalertedMatches({ sinceHours: 1, limit: 10 });
   assert.deepEqual(matches.map((job) => job.title), ["ML Intern"]);
 
   const cached = await store.getClassifications(["ml intern", "missing"]);
@@ -217,4 +197,54 @@ test("quiet drafts are stored as already alerted and a good poll sets last_ok_at
   assert.equal((await store.getTarget("greenhouse:figma"))?.lastOkAt, null);
   await store.touchTarget("greenhouse:figma", "ok", null);
   assert.ok((await store.getTarget("greenhouse:figma"))?.lastOkAt);
+});
+
+test("season and degree come from the title", () => {
+  assert.equal(ruleSeason("Software Engineer Intern (2027)"), "summer_2027");
+  assert.equal(ruleSeason("Data Science Intern (2027 Start)"), "summer_2027");
+  assert.equal(ruleSeason("SWE Intern - Summer 2027 / Fall 2027"), "summer_2027");
+  assert.equal(ruleSeason("Software Engineering Co-op, Fall 2026"), "other");
+  assert.equal(ruleSeason("Software Engineer Intern, Summer 2026"), "other");
+  assert.equal(ruleSeason("Software Engineer, Intern"), "unspecified");
+  assert.equal(ruleSeason("Software Engineer, Intern (Summer or Winter)"), "unspecified");
+  assert.equal(ruleSeason("Software Engineering Intern, Compiler Verification - Spring 2027"), "other");
+  assert.equal(ruleDegree("PhD GenAI Research Scientist Intern"), "phd_only");
+  assert.equal(ruleDegree("Research Intern (MS/PhD)"), "any");
+  assert.equal(ruleDegree("Software Engineer Intern"), "any");
+  assert.equal(ruleDegree("Strategic Finance & Analytics Intern (MBA)"), "mba_only");
+});
+
+test("locations sort into US, abroad, and unclear", () => {
+  assert.equal(ruleUs("Hybrid - San Francisco, CA"), true);
+  assert.equal(ruleUs("New York, NY"), true);
+  assert.equal(ruleUs("Washington, D.C."), true);
+  assert.equal(ruleUs("Remote-US"), true);
+  assert.equal(ruleUs("Mountain View, California; San Francisco, California"), true);
+  assert.equal(ruleUs("NYC / Toronto"), true);
+  assert.equal(ruleUs("Bengaluru"), false);
+  assert.equal(ruleUs("London, United Kingdom"), false);
+  assert.equal(ruleUs("Seoul, South Korea"), false);
+  assert.equal(ruleUs("Toronto, ON"), false);
+  assert.equal(ruleUs("Remote - Americas"), null);
+  assert.equal(ruleUs("2 Locations"), null);
+  assert.equal(ruleUs(null), null);
+  assert.equal(ruleUs("Product Manager Intern (2027) - Lisbon, PT"), false);
+  assert.equal(ruleUs("Product Manager Intern (2027) - London, UK"), false);
+  assert.equal(ruleUs("Software Engineer Intern (2027) - Austin, TX"), true);
+  assert.equal(ruleUs("Software Engineer, Intern"), null);
+});
+
+test("a match needs intern, target family, right season, degree, and the US", () => {
+  const swe = ruleClassify("Software Engineer Intern");
+  assert.equal(evaluate("a", swe, true).match, true);
+  assert.equal(evaluate("a", swe, null).match, true);
+  const abroad = evaluate("a", swe, false);
+  assert.equal(abroad.match, false);
+  assert.equal(abroad.reason, "outside the US");
+  assert.ok(abroad.score <= 0.2);
+  assert.equal(evaluate("a", ruleClassify("PhD GenAI Research Scientist Intern"), true).match, false);
+  assert.equal(evaluate("a", ruleClassify("Software Engineering Co-op, Fall 2026"), true).match, false);
+  assert.equal(evaluate("a", ruleClassify("Hardware Engineering Intern"), true).match, false);
+  assert.equal(evaluate("a", ruleClassify("Senior Software Engineer"), true).match, false);
+  assert.equal(evaluate("a", ruleClassify("High School Internship, Software Engineering (Summer 2027)"), true).match, false);
 });

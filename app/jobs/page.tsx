@@ -12,21 +12,21 @@ function last(value: string | string[] | undefined, fallback = ""): string {
 export default async function JobsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string | string[]; family?: string | string[]; early?: string | string[] }>;
+  searchParams: Promise<{ q?: string | string[]; family?: string | string[]; match?: string | string[] }>;
 }) {
   const params = await searchParams;
   const q = last(params.q);
   const family = last(params.family);
-  const early = last(params.early, "1") === "1";
+  const matchOnly = last(params.match, "1") === "1";
   const jobs = await getStore().listJobs({
     q,
     family: family || undefined,
-    earlyOnly: early,
+    matchOnly,
     limit: 150,
   });
   return (
     <main>
-      <p className="lede">Early-career rows are internships and new-grad titles. Score is 0–100 from the classifier. The same company, title, and location collapse to one row, with each source URL kept.</p>
+      <p className="lede">A match is a Summer 2027 software, ML, or data internship in the US, open to undergrad or master&apos;s students. Untick the box to see every stored internship and why it was left out. The same company, title, and location collapse to one row.</p>
       <form className="toolbar" action="/jobs">
         <input name="q" defaultValue={q} placeholder="Title or company" />
         <select name="family" defaultValue={family}>
@@ -35,10 +35,10 @@ export default async function JobsPage({
             <option key={item} value={item}>{item}</option>
           ))}
         </select>
-        <input type="hidden" name="early" value="0" />
+        <input type="hidden" name="match" value="0" />
         <label className="row-actions">
-          <input type="checkbox" name="early" value="1" defaultChecked={early} />
-          Early career only
+          <input type="checkbox" name="match" value="1" defaultChecked={matchOnly} />
+          Matches only
         </label>
         <button className="btn" type="submit">Filter</button>
       </form>
@@ -62,6 +62,7 @@ export default async function JobsPage({
                   <td>
                     <a className="title-link" href={job.canonicalUrl} target="_blank" rel="noreferrer">{job.title}</a>
                     <span className="sub">{job.company}{job.location ? ` · ${job.location}` : ""}</span>
+                    {job.classifyReason ? <span className="sub">{job.match ? "" : "Left out: "}{job.classifyReason}</span> : null}
                   </td>
                   <td><span className="pill neutral">{job.roleFamily ?? "unsorted"}</span></td>
                   <td>{job.score === null ? "—" : Math.round(job.score * 100)}</td>

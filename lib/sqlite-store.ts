@@ -8,11 +8,15 @@ import type {
   ApplicationStatus,
   Ats,
   Classification,
+  Degree,
   Job,
+  JobEvaluation,
   JobDraft,
   JobFilter,
+  LocationVerdict,
   PollRun,
   RoleFamily,
+  Season,
   Seniority,
   SourceUrl,
   Stats,
@@ -60,6 +64,10 @@ type JobRow = {
   score: number | null;
   classify_reason: string | null;
   classify_model: string | null;
+  season: string | null;
+  degree: string | null;
+  us: number | null;
+  match: number | null;
   alerted_at: string | null;
 };
 
@@ -113,6 +121,10 @@ function mapJob(row: JobRow): Job {
     score: row.score,
     classifyReason: row.classify_reason,
     classifyModel: row.classify_model,
+    season: row.season,
+    degree: row.degree,
+    us: row.us === null ? null : row.us === 1,
+    match: row.match === null ? null : row.match === 1,
     alertedAt: row.alerted_at,
   };
 }
@@ -198,10 +210,30 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       error TEXT
     );
   `);
-  const targetColumns = db.prepare("PRAGMA table_info(targets)").all() as Array<{ name: string }>;
-  if (!targetColumns.some((column) => column.name === "last_ok_at")) {
-    db.exec("ALTER TABLE targets ADD COLUMN last_ok_at TEXT");
-  }
+  const addColumn = (table: string, column: string, type: string) => {
+    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  };
+  addColumn("targets", "last_ok_at", "TEXT");
+  addColumn("jobs", "season", "TEXT");
+  addColumn("jobs", "degree", "TEXT");
+  addColumn("jobs", "us", "INTEGER");
+  addColumn("jobs", "match", "INTEGER");
+  addColumn("classifications", "season", "TEXT");
+  addColumn("classifications", "degree", "TEXT");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS locations (
+      cache_key TEXT PRIMARY KEY,
+      location TEXT NOT NULL,
+      us INTEGER,
+      model TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS jobs_match_idx ON jobs (match);
+    -- Titles labelled before season and degree existed are labelled again.
+    DELETE FROM classifications WHERE season IS NULL;
+    UPDATE jobs SET classify_model = NULL WHERE match IS NULL AND classify_model IS NOT NULL;
+  `);
 
   const getTargetStmt = db.prepare("SELECT * FROM targets WHERE id = ?");
   const getJobStmt = db.prepare("SELECT * FROM jobs WHERE id = ?");
@@ -318,7 +350,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
     async listJobs(filter: JobFilter) {
       const where: string[] = [];
       const params: Array<string | number> = [];
-      if (filter.earlyOnly) where.push("(is_intern = 1 OR seniority = 'new_grad')");
+      if (filter.matchOnly) where.push("match = 1");
       if (filter.family) {
         where.push("role_family = ?");
         params.push(filter.family);
@@ -334,27 +366,37 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       const rows = db.prepare(sql).all(...params) as JobRow[];
       return rows.map(mapJob);
     },
-    async titlesForIds(ids) {
-      if (ids.length === 0) return [];
-      const titles: string[] = [];
-      for (let i = 0; i < ids.length; i += 200) {
-        const chunk = ids.slice(i, i + 200);
-        const marks = chunk.map(() => "?").join(", ");
-        const rows = db.prepare(`SELECT title FROM jobs WHERE id IN (${marks})`).all(...chunk) as Array<{ title: string }>;
-        titles.push(...rows.map((row) => row.title));
-      }
-      return titles;
-    },
-    async titlesNeedingClassification(limit) {
+    async jobsNeedingEvaluation({ limit, upgradeRules }) {
       const rows = db
         .prepare(
-          `SELECT MIN(title) AS title FROM jobs
-           WHERE classify_model IS NULL OR classify_model = 'rules'
-           GROUP BY title_key
+          `SELECT * FROM jobs
+           WHERE classify_model IS NULL OR (? = 1 AND classify_model = 'rules')
+           ORDER BY classify_model IS NOT NULL, first_seen_at DESC
            LIMIT ?`,
         )
-        .all(limit) as Array<{ title: string }>;
-      return rows.map((row) => row.title);
+        .all(upgradeRules ? 1 : 0, limit) as JobRow[];
+      return rows.map(mapJob);
+    },
+    async saveEvaluations(rows: JobEvaluation[]) {
+      const stmt = db.prepare(
+        `UPDATE jobs SET is_intern = ?, role_family = ?, seniority = ?, season = ?, degree = ?, us = ?,
+         match = ?, score = ?, classify_reason = ?, classify_model = ? WHERE id = ?`,
+      );
+      for (const row of rows) {
+        stmt.run(
+          row.isIntern ? 1 : 0,
+          row.roleFamily,
+          row.seniority,
+          row.season,
+          row.degree,
+          row.us === null ? null : row.us ? 1 : 0,
+          row.match ? 1 : 0,
+          row.score,
+          row.reason,
+          row.model,
+          row.id,
+        );
+      }
     },
     async getClassifications(cacheKeys) {
       const found = new Map<string, Classification>();
@@ -367,6 +409,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
           is_intern: number;
           role_family: RoleFamily;
           seniority: Seniority;
+          season: Season | null;
+          degree: Degree | null;
           score: number;
           reason: string;
           model: string;
@@ -378,6 +422,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
             isIntern: row.is_intern === 1,
             roleFamily: row.role_family,
             seniority: row.seniority,
+            season: row.season ?? "unspecified",
+            degree: row.degree ?? "any",
             score: row.score,
             reason: row.reason,
             model: row.model,
@@ -386,62 +432,81 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       }
       return found;
     },
-    async putClassification(row: Classification) {
-      db.prepare(
+    async putClassifications(rows: Classification[]) {
+      const stmt = db.prepare(
         `INSERT INTO classifications (
-          cache_key, title, is_intern, role_family, seniority, score, reason, model, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          cache_key, title, is_intern, role_family, seniority, season, degree, score, reason, model, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(cache_key) DO UPDATE SET
           title = excluded.title,
           is_intern = excluded.is_intern,
           role_family = excluded.role_family,
           seniority = excluded.seniority,
+          season = excluded.season,
+          degree = excluded.degree,
           score = excluded.score,
           reason = excluded.reason,
           model = excluded.model`,
-      ).run(
-        row.cacheKey,
-        row.title,
-        row.isIntern ? 1 : 0,
-        row.roleFamily,
-        row.seniority,
-        row.score,
-        row.reason,
-        row.model,
-        new Date().toISOString(),
       );
+      const now = new Date().toISOString();
+      for (const row of rows) {
+        stmt.run(
+          row.cacheKey,
+          row.title,
+          row.isIntern ? 1 : 0,
+          row.roleFamily,
+          row.seniority,
+          row.season,
+          row.degree,
+          row.score,
+          row.reason,
+          row.model,
+          now,
+        );
+      }
     },
-    async applyClassifications() {
-      db.exec(`
-        UPDATE jobs
-        SET
-          is_intern = c.is_intern,
-          role_family = c.role_family,
-          seniority = c.seniority,
-          score = c.score,
-          classify_reason = c.reason,
-          classify_model = c.model
-        FROM classifications AS c
-        WHERE jobs.title_key = c.cache_key
-          AND (
-            jobs.classify_model IS NULL
-            OR (jobs.classify_model = 'rules' AND c.model != 'rules')
-          )
-      `);
+    async getLocations(cacheKeys) {
+      const found = new Map<string, LocationVerdict>();
+      for (let i = 0; i < cacheKeys.length; i += 200) {
+        const chunk = cacheKeys.slice(i, i + 200);
+        const marks = chunk.map(() => "?").join(", ");
+        const rows = db.prepare(`SELECT * FROM locations WHERE cache_key IN (${marks})`).all(...chunk) as Array<{
+          cache_key: string;
+          location: string;
+          us: number | null;
+          model: string;
+        }>;
+        for (const row of rows) {
+          found.set(row.cache_key, {
+            cacheKey: row.cache_key,
+            location: row.location,
+            us: row.us === null ? null : row.us === 1,
+            model: row.model,
+          });
+        }
+      }
+      return found;
     },
-    async listUnalertedMatches({ sinceHours, limit, minScore }) {
+    async putLocations(rows: LocationVerdict[]) {
+      const stmt = db.prepare(
+        `INSERT INTO locations (cache_key, location, us, model, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(cache_key) DO UPDATE SET location = excluded.location, us = excluded.us, model = excluded.model`,
+      );
+      const now = new Date().toISOString();
+      for (const row of rows) stmt.run(row.cacheKey, row.location, row.us === null ? null : row.us ? 1 : 0, row.model, now);
+    },
+    async listUnalertedMatches({ sinceHours, limit }) {
       const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
       const rows = db
         .prepare(
           `SELECT * FROM jobs
            WHERE alerted_at IS NULL
              AND first_seen_at >= ?
-             AND score >= ?
-             AND (is_intern = 1 OR seniority = 'new_grad')
+             AND match = 1
            ORDER BY score DESC, first_seen_at DESC
            LIMIT ?`,
         )
-        .all(since, minScore, limit) as JobRow[];
+        .all(since, limit) as JobRow[];
       return rows.map(mapJob);
     },
     async markAlerted(ids) {
@@ -514,7 +579,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
     async stats(): Promise<Stats> {
       const targets = db.prepare("SELECT COUNT(*) AS n, SUM(enabled) AS enabled FROM targets").get() as { n: number; enabled: number | null };
       const jobs = db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number };
-      const early = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE is_intern = 1 OR seniority = 'new_grad'").get() as { n: number };
+      const matches = db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE match = 1").get() as { n: number };
       const apps = db.prepare("SELECT COUNT(*) AS n FROM applications").get() as { n: number };
       const recentRuns = db
         .prepare(
@@ -533,7 +598,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         targets: targets.n,
         targetsEnabled: targets.enabled ?? 0,
         jobs: jobs.n,
-        earlyCareer: early.n,
+        matches: matches.n,
         applications: apps.n,
         recentRuns: recentRuns.map((row) => ({
           targetId: row.target_id,

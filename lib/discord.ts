@@ -28,7 +28,7 @@ export async function notifyDiscord(jobs: Job[]): Promise<number> {
       embeds: shown.map((job) => ({
         title: job.title.slice(0, 250),
         url: job.canonicalUrl,
-        description: [job.company, job.location, job.roleFamily, job.score === null ? null : `${Math.round(job.score * 100)}`]
+        description: [job.company, job.location, job.roleFamily, job.season === "summer_2027" ? "Summer 2027" : null]
           .filter(Boolean)
           .join(" · ")
           .slice(0, 300),

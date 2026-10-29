@@ -1,8 +1,8 @@
-import { titleCacheKey } from "./canonicalize";
-import { classifyTitles, isCandidateTitle } from "./classify";
+import { evaluateJobs, isCandidateTitle } from "./classify";
 import { notifyDiscord } from "./discord";
-import { envFloat, envInt, jitteredMs, sleep } from "./jitter";
+import { envInt, jitteredMs, sleep } from "./jitter";
 import { fetchTargetJobs, toDrafts } from "./sources";
+import { llmProviders } from "./llm";
 import { getStore } from "./store";
 import { isDue } from "./targets";
 import type { Store, Target } from "./types";
@@ -65,7 +65,7 @@ async function runPool<T>(items: T[], size: number, work: (item: T) => Promise<v
   await Promise.all(workers);
 }
 
-async function pollOne(store: Store, target: Target, summary: PollSummary, newIds: string[]): Promise<void> {
+async function pollOne(store: Store, target: Target, summary: PollSummary): Promise<void> {
   summary.targets++;
   const startedAt = new Date().toISOString();
   try {
@@ -77,7 +77,6 @@ async function pollOne(store: Store, target: Target, summary: PollSummary, newId
       .filter((draft) => isCandidateTitle(draft.title))
       .map((draft) => ({ ...draft, quiet: baseline && !postedRecently(draft.postedAt) }));
     const result = await store.upsertJobs(candidates);
-    newIds.push(...result.insertedIds);
     summary.jobsSeen += drafts.length;
     summary.candidates += candidates.length;
     summary.jobsNew += result.insertedIds.length;
@@ -116,40 +115,24 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
     if (opts.targetId) return true;
     return target.enabled && (opts.force || isDue(target));
   });
-  const newIds: string[] = [];
   const gapMs = envInt("POLL_GAP_MS", 1200);
   await runPool(buildLanes(due, envInt("POLL_HOST_LANES", 2)), envInt("POLL_CONCURRENCY", 8), async (lane) => {
     for (let i = 0; i < lane.length; i++) {
       if (i > 0) await sleep(jitteredMs(gapMs, 0.5));
-      await pollOne(store, lane[i], summary, newIds);
+      await pollOne(store, lane[i], summary);
     }
   });
 
-  const freshTitles = await store.titlesForIds(newIds);
-  const backlog = await store.titlesNeedingClassification(500);
-  const seen = new Set<string>();
-  const ordered: string[] = [];
-  for (const title of [...freshTitles, ...backlog]) {
-    const key = titleCacheKey(title);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    ordered.push(title);
-  }
-  const classifiedKeys = await classifyTitles(
-    ordered,
-    (keys) => store.getClassifications(keys),
-    (row) => store.putClassification(row),
-  );
-  summary.classified = classifiedKeys.length;
-  await store.applyClassifications(classifiedKeys);
+  const providers = await llmProviders();
+  summary.classified = await evaluateJobs(store, envInt("EVALUATE_LIMIT", 1000), providers);
 
   if (process.env.DISCORD_WEBHOOK_URL?.trim()) {
     try {
-      const matches = await store.listUnalertedMatches({
-        sinceHours: 48,
-        limit: 8,
-        minScore: envFloat("INTERN_SCORE_THRESHOLD", 0.5),
-      });
+      // A match judged by rules alone waits up to 2 hours for a model to confirm it.
+      const holdMs = 2 * 60 * 60 * 1000;
+      const matches = (await store.listUnalertedMatches({ sinceHours: 48, limit: 50 })).filter(
+        (job) => providers.length === 0 || job.classifyModel !== "rules" || Date.now() - Date.parse(job.firstSeenAt) > holdMs,
+      );
       if (matches.length > 0) {
         summary.alerted = await notifyDiscord(matches);
         await store.markAlerted(matches.map((job) => job.id));

@@ -8,8 +8,10 @@ import type {
   Ats,
   Classification,
   Job,
+  JobEvaluation,
   JobDraft,
   JobFilter,
+  LocationVerdict,
   PollRun,
   SourceUrl,
   Stats,
@@ -39,6 +41,10 @@ type JobRow = {
   score: number | null;
   classify_reason: string | null;
   classify_model: string | null;
+  season: string | null;
+  degree: string | null;
+  us: number | null;
+  match: number | null;
   alerted_at: string | null;
 };
 
@@ -80,6 +86,10 @@ function mapJob(row: JobRow): Job {
     score: row.score,
     classifyReason: row.classify_reason,
     classifyModel: row.classify_model,
+    season: row.season,
+    degree: row.degree,
+    us: row.us === null ? null : row.us === 1,
+    match: row.match === null ? null : row.match === 1,
     alertedAt: row.alerted_at,
   };
 }
@@ -271,7 +281,7 @@ export function createSupabaseStore(): Store {
     },
     async listJobs(filter: JobFilter) {
       let query = db.from("jobs").select("*");
-      if (filter.earlyOnly) query = query.or("is_intern.eq.1,seniority.eq.new_grad");
+      if (filter.matchOnly) query = query.eq("match", 1);
       if (filter.family) query = query.eq("role_family", filter.family);
       const q = safeQuery(filter.q ?? "");
       if (q) query = query.or(`title.ilike.%${q}%,company.ilike.%${q}%`);
@@ -280,32 +290,45 @@ export function createSupabaseStore(): Store {
       fail(error);
       return ((data ?? []) as JobRow[]).map(mapJob);
     },
-    async titlesForIds(ids) {
-      if (ids.length === 0) return [];
-      const titles: string[] = [];
-      for (let i = 0; i < ids.length; i += 200) {
-        const chunk = ids.slice(i, i + 200);
-        const { data, error } = await db.from("jobs").select("title").in("id", chunk);
-        fail(error);
-        titles.push(...((data ?? []) as Array<{ title: string }>).map((row) => row.title));
-      }
-      return titles;
-    },
-    async titlesNeedingClassification(limit) {
+    async jobsNeedingEvaluation({ limit, upgradeRules }) {
       const { data, error } = await db
         .from("jobs")
-        .select("title, title_key")
-        .or("classify_model.is.null,classify_model.eq.rules")
+        .select("*")
+        .or(upgradeRules ? "classify_model.is.null,classify_model.eq.rules" : "classify_model.is.null")
+        .order("classify_model", { ascending: true, nullsFirst: true })
+        .order("first_seen_at", { ascending: false })
         .limit(limit);
       fail(error);
-      const seen = new Set<string>();
-      const titles: string[] = [];
-      for (const row of (data ?? []) as Array<{ title: string; title_key: string }>) {
-        if (seen.has(row.title_key)) continue;
-        seen.add(row.title_key);
-        titles.push(row.title);
+      return ((data ?? []) as JobRow[]).map(mapJob);
+    },
+    // Jobs that share a title and US verdict get identical fields, so they are
+    // written together with one update per distinct verdict.
+    async saveEvaluations(rows: JobEvaluation[]) {
+      const groups = new Map<string, { fields: Record<string, unknown>; ids: string[] }>();
+      for (const row of rows) {
+        const fields = {
+          is_intern: row.isIntern ? 1 : 0,
+          role_family: row.roleFamily,
+          seniority: row.seniority,
+          season: row.season,
+          degree: row.degree,
+          us: row.us === null ? null : row.us ? 1 : 0,
+          match: row.match ? 1 : 0,
+          score: row.score,
+          classify_reason: row.reason,
+          classify_model: row.model,
+        };
+        const key = JSON.stringify(fields);
+        const group = groups.get(key) ?? { fields, ids: [] as string[] };
+        group.ids.push(row.id);
+        groups.set(key, group);
       }
-      return titles;
+      for (const { fields, ids } of groups.values()) {
+        for (const chunk of chunks(ids, 200)) {
+          const { error } = await db.from("jobs").update(fields).in("id", chunk);
+          fail(error);
+        }
+      }
     },
     async getClassifications(cacheKeys) {
       const found = new Map<string, Classification>();
@@ -319,6 +342,8 @@ export function createSupabaseStore(): Store {
             isIntern: row.is_intern === 1,
             roleFamily: row.role_family as Classification["roleFamily"],
             seniority: row.seniority as Classification["seniority"],
+            season: (row.season as Classification["season"] | null) ?? "unspecified",
+            degree: (row.degree as Classification["degree"] | null) ?? "any",
             score: row.score as number,
             reason: row.reason as string,
             model: row.model as string,
@@ -327,56 +352,66 @@ export function createSupabaseStore(): Store {
       }
       return found;
     },
-    async putClassification(row) {
-      const { error } = await db.from("classifications").upsert({
-        cache_key: row.cacheKey,
-        title: row.title,
-        is_intern: row.isIntern ? 1 : 0,
-        role_family: row.roleFamily,
-        seniority: row.seniority,
-        score: row.score,
-        reason: row.reason,
-        model: row.model,
-        created_at: new Date().toISOString(),
-      });
-      fail(error);
-    },
-    // One update per title: every job sharing a title gets that title's classification.
-    // Covers titles classified this run plus jobs whose title was already cached.
-    async applyClassifications(cacheKeys = []) {
-      const { data, error } = await db.from("jobs").select("title_key").is("classify_model", null).limit(1000);
-      fail(error);
-      const keys = [...new Set([...cacheKeys, ...((data ?? []) as Array<{ title_key: string }>).map((row) => row.title_key)])];
-      for (const chunk of chunks(keys, 200)) {
-        const loaded = await db.from("classifications").select("*").in("cache_key", chunk);
-        fail(loaded.error);
-        for (const row of loaded.data ?? []) {
-          let query = db
-            .from("jobs")
-            .update({
-              is_intern: row.is_intern,
-              role_family: row.role_family,
-              seniority: row.seniority,
-              score: row.score,
-              classify_reason: row.reason,
-              classify_model: row.model,
-            })
-            .eq("title_key", row.cache_key);
-          if (row.model === "rules") query = query.is("classify_model", null);
-          const { error: updateError } = await query;
-          fail(updateError);
-        }
+    async putClassifications(rows) {
+      const now = new Date().toISOString();
+      for (const chunk of chunks(rows, 500)) {
+        const { error } = await db.from("classifications").upsert(
+          chunk.map((row) => ({
+            cache_key: row.cacheKey,
+            title: row.title,
+            is_intern: row.isIntern ? 1 : 0,
+            role_family: row.roleFamily,
+            seniority: row.seniority,
+            season: row.season,
+            degree: row.degree,
+            score: row.score,
+            reason: row.reason,
+            model: row.model,
+            created_at: now,
+          })),
+        );
+        fail(error);
       }
     },
-    async listUnalertedMatches({ sinceHours, limit, minScore }) {
+    async getLocations(cacheKeys) {
+      const found = new Map<string, LocationVerdict>();
+      for (const chunk of chunks(cacheKeys, 200)) {
+        const { data, error } = await db.from("locations").select("*").in("cache_key", chunk);
+        fail(error);
+        for (const row of data ?? []) {
+          found.set(row.cache_key as string, {
+            cacheKey: row.cache_key as string,
+            location: row.location as string,
+            us: row.us === null ? null : row.us === 1,
+            model: row.model as string,
+          });
+        }
+      }
+      return found;
+    },
+    async putLocations(rows: LocationVerdict[]) {
+      const now = new Date().toISOString();
+      for (const chunk of chunks(rows, 500)) {
+        const { error } = await db.from("locations").upsert(
+          chunk.map((row) => ({
+            cache_key: row.cacheKey,
+            location: row.location,
+            us: row.us === null ? null : row.us ? 1 : 0,
+            model: row.model,
+            created_at: now,
+          })),
+        );
+        fail(error);
+      }
+    },
+    async listUnalertedMatches({ sinceHours, limit }) {
       const since = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
       const { data, error } = await db
         .from("jobs")
         .select("*")
         .is("alerted_at", null)
         .gte("first_seen_at", since)
-        .gte("score", minScore)
-        .or("is_intern.eq.1,seniority.eq.new_grad")
+        .eq("match", 1)
         .order("score", { ascending: false })
         .limit(limit);
       fail(error);
@@ -454,20 +489,20 @@ export function createSupabaseStore(): Store {
       const targets = await db.from("targets").select("*", { count: "exact", head: true });
       const enabled = await db.from("targets").select("*", { count: "exact", head: true }).eq("enabled", 1);
       const jobs = await db.from("jobs").select("*", { count: "exact", head: true });
-      const early = await db.from("jobs").select("*", { count: "exact", head: true }).or("is_intern.eq.1,seniority.eq.new_grad");
+      const matches = await db.from("jobs").select("*", { count: "exact", head: true }).eq("match", 1);
       const apps = await db.from("applications").select("*", { count: "exact", head: true });
       const runs = await db.from("poll_runs").select("*").order("started_at", { ascending: false }).limit(8);
       fail(targets.error);
       fail(enabled.error);
       fail(jobs.error);
-      fail(early.error);
+      fail(matches.error);
       fail(apps.error);
       fail(runs.error);
       return {
         targets: targets.count ?? 0,
         targetsEnabled: enabled.count ?? 0,
         jobs: jobs.count ?? 0,
-        earlyCareer: early.count ?? 0,
+        matches: matches.count ?? 0,
         applications: apps.count ?? 0,
         recentRuns: ((runs.data ?? []) as Array<Record<string, string | number | null>>).map((row) => ({
           targetId: String(row.target_id),
