@@ -23,8 +23,8 @@ export async function notifyDiscord(jobs: Job[]): Promise<number> {
       username: "Intern Finder",
       content:
         extra > 0
-          ? `${jobs.length} new early-career roles. ${extra} more are in the dashboard.`
-          : `${shown.length} new early-career role${shown.length === 1 ? "" : "s"}.`,
+          ? `${jobs.length} new internship matches. ${extra} more are in the dashboard.`
+          : `${shown.length} new internship match${shown.length === 1 ? "" : "es"}.`,
       embeds: shown.map((job) => ({
         title: job.title.slice(0, 250),
         url: job.canonicalUrl,

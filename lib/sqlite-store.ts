@@ -621,6 +621,13 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
       db.prepare("DELETE FROM poll_runs WHERE started_at < ?").run(cutoff);
     },
+    async pruneJobs(olderThanDays) {
+      const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+      const result = db
+        .prepare("DELETE FROM jobs WHERE last_seen_at < ? AND id NOT IN (SELECT job_id FROM applications)")
+        .run(cutoff);
+      return Number(result.changes);
+    },
     async stats(): Promise<Stats> {
       const targets = db.prepare("SELECT COUNT(*) AS n, SUM(enabled) AS enabled FROM targets").get() as { n: number; enabled: number | null };
       const jobs = db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number };

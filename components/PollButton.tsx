@@ -14,13 +14,22 @@ export function PollButton({ targetId, label, primary = false }: { targetId?: st
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ targetId }),
     });
-    const data = (await res.json().catch(() => ({}))) as { error?: string; jobsNew?: number; jobsSeen?: number };
+    const data = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      dispatched?: boolean;
+      jobsNew?: number;
+      jobsSeen?: number;
+    };
     if (!res.ok) {
       setState("error");
       setMessage(data.error || "Poll failed");
       return;
     }
     setState("done");
+    if (data.dispatched) {
+      setMessage("Started on GitHub Actions. New jobs show up here in about 10 minutes.");
+      return;
+    }
     setMessage(`${data.jobsNew ?? 0} new of ${data.jobsSeen ?? 0} seen`);
     window.setTimeout(() => window.location.reload(), 700);
   }

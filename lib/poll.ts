@@ -184,6 +184,7 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
 
   try {
     await store.pruneRuns(envInt("POLL_RUN_RETENTION_DAYS", 7));
+    await store.pruneJobs(envInt("JOB_RETENTION_DAYS", 45));
   } catch (err) {
     summary.errors.push({ targetId: "prune", error: err instanceof Error ? err.message : String(err) });
   }

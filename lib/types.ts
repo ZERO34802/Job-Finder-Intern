@@ -204,5 +204,7 @@ export interface Store {
   deleteApplication(jobId: string): Promise<void>;
   recordRun(run: PollRun): Promise<void>;
   pruneRuns(olderThanDays: number): Promise<void>;
+  // Deletes jobs no source has listed for this long, except tracked applications.
+  pruneJobs(olderThanDays: number): Promise<number>;
   stats(): Promise<Stats>;
 }

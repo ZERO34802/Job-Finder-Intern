@@ -333,3 +333,24 @@ test("a list job and its board posting become one row", async () => {
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].sourceUrls.length, 3);
 });
+
+test("old jobs are pruned unless they are tracked", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "intern-finder-"));
+  const store = createSqliteStore(path.join(dir, "test.db"));
+  const draft = (n: number) => ({
+    company: "Acme",
+    title: `Software Engineer Intern ${n}`,
+    location: "Austin, TX",
+    url: `https://boards.greenhouse.io/acme/jobs/${n}`,
+    ats: "greenhouse" as const,
+    targetId: "greenhouse:acme",
+    externalId: String(n),
+    postedAt: null,
+  });
+  const { insertedIds } = await store.upsertJobs([draft(1), draft(2), draft(3)]);
+  await store.upsertApplication({ jobId: insertedIds[0], status: "applied" });
+  assert.equal(await store.pruneJobs(1), 0);
+  assert.equal(await store.pruneJobs(-1), 2);
+  const left = await store.listJobs({ limit: 10 });
+  assert.deepEqual(left.map((job) => job.id), [insertedIds[0]]);
+});

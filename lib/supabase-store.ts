@@ -553,6 +553,18 @@ export function createSupabaseStore(): Store {
       const { error } = await db.from("poll_runs").delete().lt("started_at", cutoff);
       fail(error);
     },
+    async pruneJobs(olderThanDays) {
+      const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+      const tracked = await db.from("applications").select("job_id");
+      fail(tracked.error);
+      const keep = ((tracked.data ?? []) as Array<{ job_id: string }>).map((row) => row.job_id);
+      let query = db.from("jobs").delete({ count: "exact" }).lt("last_seen_at", cutoff);
+      // Job ids are hex hashes, so they are safe inside the in-list.
+      if (keep.length > 0) query = query.not("id", "in", `(${keep.join(",")})`);
+      const { error, count } = await query;
+      fail(error);
+      return count ?? 0;
+    },
     async stats(): Promise<Stats> {
       const targets = await db.from("targets").select("*", { count: "exact", head: true });
       const enabled = await db.from("targets").select("*", { count: "exact", head: true }).eq("enabled", 1);
