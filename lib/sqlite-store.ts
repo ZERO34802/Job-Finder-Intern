@@ -255,7 +255,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       return row ? mapTarget(row) : null;
     },
     async upsertTarget(input: TargetInput) {
-      const idGuess = input.ats === "workday" ? `workday:${(input.workdayTenant ?? "").toLowerCase()}` : `${input.ats}:${(input.boardToken ?? "").toLowerCase()}`;
+      const idGuess = normalizeTarget(input).id;
       const existing = (getTargetStmt.get(idGuess) as TargetRow | undefined) ?? null;
       const target = normalizeTarget(input, existing ? mapTarget(existing) : null);
       db.prepare(

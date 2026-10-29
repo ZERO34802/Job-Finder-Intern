@@ -56,6 +56,12 @@ export function postingKey(url: string): string | null {
   if (gh) return `gh:${gh[1]}`;
   const uuid = url.match(/(jobs\.lever\.co|jobs\.ashbyhq\.com)\/[^/]+\/([0-9a-f]{8}-[0-9a-f-]{27})/i);
   if (uuid) return `${uuid[1].startsWith("jobs.lever") ? "lever" : "ashby"}:${uuid[2].toLowerCase()}`;
+  const oracle = url.match(/\/\/([a-z0-9-]+)[^/]*oraclecloud\.com\/.*\/job\/(\d+)/i);
+  if (oracle) return `or:${oracle[1].toLowerCase()}:${oracle[2]}`;
+  const amazon = url.match(/amazon\.jobs\/(?:[a-z]{2}\/)?jobs\/(\d+)/);
+  if (amazon) return `amzn:${amazon[1]}`;
+  const tiktok = url.match(/lifeattiktok\.com\/search\/(\d{12,})/);
+  if (tiktok) return `tt:${tiktok[1]}`;
   const ef = url.match(/\/careers\/job\/(\d{11,})/);
   if (ef) return `ef:${ef[1]}`;
   const sr = url.match(/smartrecruiters\.com\/[^/]+\/(\d{6,})/);

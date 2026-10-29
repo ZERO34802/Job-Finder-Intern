@@ -40,7 +40,7 @@ function postedRecently(postedAt: string | null): boolean {
 // Boards on a shared API host (all Greenhouse boards hit one host) are split
 // into a few sequential lanes; each Workday tenant is its own host and lane.
 function hostKey(target: Target): string {
-  if (target.ats === "workday") return `workday:${target.workdayHost}`;
+  if (target.ats === "workday" || target.ats === "oracle") return `${target.ats}:${target.workdayHost}`;
   // Each list and each Eightfold site is its own host.
   if (target.ats === "list" || target.ats === "eightfold") return `${target.ats}:${target.boardToken}`;
   return target.ats;
@@ -143,9 +143,12 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
     alerted: 0,
     errors: [],
   };
-  await store.addTargets(
-    Object.entries(LIST_FEEDS).map(([feed, config]) => ({ company: config.company, ats: "list" as const, boardToken: feed })),
-  );
+  // Lists and the single-company career sites are always present as targets.
+  await store.addTargets([
+    ...Object.entries(LIST_FEEDS).map(([feed, config]) => ({ company: config.company, ats: "list" as const, boardToken: feed })),
+    { company: "Amazon", ats: "amazon", boardToken: "amazon" },
+    { company: "TikTok", ats: "tiktok", boardToken: "tiktok" },
+  ]);
   const selected = opts.targetId ? [await store.getTarget(opts.targetId)] : await store.listTargets();
   const targets = selected.filter((target) => target !== null);
   if (opts.targetId && targets.length === 0) throw new Error(`Unknown target ${opts.targetId}`);

@@ -10,6 +10,7 @@ import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
 import { boardFromUrl, parseMarkdownListings } from "../lib/sources";
 import { importTargets, seedStarter } from "../lib/seed";
+import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
 import type { Target } from "../lib/types";
 
@@ -263,6 +264,10 @@ test("posting keys line up a list link with its board posting", () => {
   );
   assert.equal(postingKey("https://jobs.smartrecruiters.com/BoschGroup/744000158594769"), "sr:744000158594769");
   assert.equal(postingKey("https://explore.jobs.netflix.net/careers/job/790318904468"), "ef:790318904468");
+  assert.equal(postingKey("https://hcwp.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1/job/2010917"), "or:hcwp:2010917");
+  assert.equal(postingKey("https://www.amazon.jobs/jobs/10587999/apply"), "amzn:10587999");
+  assert.equal(postingKey("https://amazon.jobs/en/jobs/10587999/sde-intern"), "amzn:10587999");
+  assert.equal(postingKey("https://lifeattiktok.com/search/7610545287514392837"), "tt:7610545287514392837");
   assert.equal(postingKey("https://go.vansh.nyc/Zo"), null);
 });
 
@@ -282,6 +287,17 @@ test("board links in a list become targets", () => {
     workdaySite: "NVIDIAExternalCareerSite",
   });
   assert.equal(boardFromUrl("Acme", "https://acme.com/careers/123"), null);
+  assert.deepEqual(boardFromUrl("Waymo", "https://careers.withwaymo.com/jobs?gh_jid=8234553"), {
+    company: "Waymo",
+    ats: "greenhouse",
+    boardToken: "waymo",
+  });
+  assert.deepEqual(boardFromUrl("Texas Instruments", "https://edbz.fa.us2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX/job/123"), {
+    company: "Texas Instruments",
+    ats: "oracle",
+    workdayHost: "edbz.fa.us2.oraclecloud.com",
+    workdaySite: "CX",
+  });
   assert.deepEqual(boardFromUrl("Netflix", "https://explore.jobs.netflix.net/careers/job/790318904468"), {
     company: "Netflix",
     ats: "eightfold",
@@ -386,4 +402,11 @@ test("speedyapply markdown tables parse by header name", () => {
   assert.equal(items[0].date_posted, Math.floor((now - 6 * 86_400_000) / 1000));
   assert.equal(items[1].company_name, "Rivian");
   assert.equal(items[1].locations?.[0], "Irvine, CA +1");
+});
+
+test("discovered Oracle boards normalize to one id per host and site", () => {
+  const target = normalizeTarget({ company: "TI", ats: "oracle", workdayHost: "edbz.fa.us2.oraclecloud.com", workdaySite: "CX" });
+  assert.equal(target.id, "oracle:edbz-cx");
+  assert.equal(target.workdayTenant, "edbz-cx");
+  assert.throws(() => normalizeTarget({ company: "X", ats: "oracle", workdayHost: "evil.example.com", workdaySite: "CX" }));
 });

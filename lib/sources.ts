@@ -220,6 +220,101 @@ export async function fetchEightfold(host: string): Promise<RemoteJob[]> {
   return jobs;
 }
 
+type OracleRequisition = {
+  Id?: string;
+  Title?: string;
+  PrimaryLocation?: string;
+  PostedDate?: string;
+  secondaryLocations?: Array<{ Name?: string }>;
+};
+
+// Oracle Recruiting Cloud: one public REST API shared by every company on it.
+export async function fetchOracle(host: string, site: string): Promise<RemoteJob[]> {
+  const jobs: RemoteJob[] = [];
+  for (let offset = 0; offset < 500; offset += 100) {
+    const finder = `findReqs;siteNumber=${site},keyword=intern,limit=100,offset=${offset}`;
+    const data = await fetchJson<{ items?: Array<{ TotalJobsCount?: number; requisitionList?: OracleRequisition[] }> }>(
+      `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions?onlyData=true&expand=requisitionList.secondaryLocations&finder=${encodeURIComponent(finder)}`,
+    );
+    const page = data.items?.[0];
+    const list = page?.requisitionList ?? [];
+    for (const job of list) {
+      if (!job.Id || !job.Title) continue;
+      const places = [job.PrimaryLocation, ...(job.secondaryLocations ?? []).map((item) => item.Name)].filter(Boolean);
+      jobs.push({
+        externalId: job.Id,
+        title: job.Title,
+        url: `https://${host}/hcmUI/CandidateExperience/en/sites/${site}/job/${job.Id}`,
+        location: places.length ? [...new Set(places)].join("; ") : null,
+        postedAt: job.PostedDate ?? null,
+      });
+    }
+    if (list.length < 100 || offset + 100 >= (page?.TotalJobsCount ?? 0)) break;
+  }
+  return jobs;
+}
+
+type AmazonJob = { id_icims?: string; title?: string; normalized_location?: string; posted_date?: string; job_path?: string };
+
+export async function fetchAmazon(): Promise<RemoteJob[]> {
+  const jobs: RemoteJob[] = [];
+  for (let offset = 0; offset < 500; offset += 100) {
+    const data = await fetchJson<{ hits?: number; jobs?: AmazonJob[] }>(
+      `https://www.amazon.jobs/en/search.json?base_query=intern&country=USA&result_limit=100&offset=${offset}`,
+    );
+    const page = data.jobs ?? [];
+    for (const job of page) {
+      if (!job.title || !job.job_path) continue;
+      const posted = job.posted_date ? Date.parse(job.posted_date) : NaN;
+      jobs.push({
+        externalId: job.id_icims ?? job.job_path,
+        title: job.title,
+        url: `https://www.amazon.jobs${job.job_path}`,
+        location: job.normalized_location ?? null,
+        postedAt: Number.isFinite(posted) ? new Date(posted).toISOString() : null,
+      });
+    }
+    if (page.length < 100 || offset + 100 >= (data.hits ?? 0)) break;
+  }
+  return jobs;
+}
+
+type TikTokPlace = { en_name?: string; parent?: TikTokPlace | null };
+type TikTokJob = { id?: string; title?: string; city_info?: TikTokPlace | null };
+
+// TikTok's careers site API; the website-path header is what its own page sends.
+export async function fetchTikTok(): Promise<RemoteJob[]> {
+  const jobs: RemoteJob[] = [];
+  for (let offset = 0; offset < 4000; offset += 100) {
+    const data = await fetchJson<{ data?: { count?: number; job_post_list?: TikTokJob[] } }>(
+      "https://api.lifeattiktok.com/api/v1/public/supplier/search/job/posts",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "website-path": "tiktok" },
+        body: JSON.stringify({ keyword: "intern", limit: 100, offset }),
+      },
+    );
+    const page = data.data?.job_post_list ?? [];
+    for (const job of page) {
+      if (!job.id || !job.title) continue;
+      const places: string[] = [];
+      for (let place = job.city_info; place && places.length < 4; place = place.parent) {
+        if (place.en_name) places.push(place.en_name);
+      }
+      jobs.push({
+        externalId: job.id,
+        title: job.title,
+        url: `https://lifeattiktok.com/search/${job.id}`,
+        location: places.length ? places.join(", ") : null,
+        postedAt: null,
+      });
+    }
+    if (page.length < 100 || offset + 100 >= (data.data?.count ?? 0)) break;
+    await sleep(jitteredMs(500, 0.3));
+  }
+  return jobs;
+}
+
 type Listing = {
   id?: string;
   title?: string;
@@ -321,6 +416,14 @@ export function boardFromUrl(company: string, raw: string): TargetInput | null {
   if ((host === "jobs.smartrecruiters.com" || host === "careers.smartrecruiters.com") && first) {
     return { company, ats: "smartrecruiters", boardToken: first };
   }
+  const oracle = raw.match(/^https:\/\/([^/]+\.oraclecloud\.com)\/hcmUI\/CandidateExperience\/[a-z-]+\/sites\/([^/?#]+)/i);
+  if (oracle) return { company, ats: "oracle", workdayHost: oracle[1], workdaySite: oracle[2] };
+  // A Greenhouse job on the company's own domain (?gh_jid=) does not name the board; guess
+  // it from the company name. Wrong guesses answer 404 on their first poll and switch off.
+  if (url.searchParams.has("gh_jid")) {
+    const token = company.toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]/g, "");
+    return token ? { company, ats: "greenhouse", boardToken: token } : null;
+  }
   // Eightfold job links look like https://<host>/careers/job/<12-digit id>.
   if (host.endsWith(".eightfold.ai") || /^\/careers\/job\/\d{11,}/.test(url.pathname)) {
     return { company, ats: "eightfold", boardToken: host };
@@ -375,6 +478,12 @@ export async function fetchTargetJobs(target: Target): Promise<RemoteJob[]> {
     if (!target.boardToken) throw new Error("smartrecruiters target is missing a company id");
     return fetchSmartRecruiters(target.boardToken);
   }
+  if (target.ats === "oracle") {
+    if (!target.workdayHost || !target.workdaySite) throw new Error("oracle target is missing host or site");
+    return fetchOracle(target.workdayHost, target.workdaySite);
+  }
+  if (target.ats === "amazon") return fetchAmazon();
+  if (target.ats === "tiktok") return fetchTikTok();
   if (target.ats === "eightfold") {
     if (!target.boardToken) throw new Error("eightfold target is missing a host");
     return fetchEightfold(target.boardToken);

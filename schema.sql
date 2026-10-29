@@ -22,10 +22,8 @@ create table if not exists targets (
 alter table targets add column if not exists last_ok_at timestamptz;
 update targets set last_ok_at = last_polled_at where last_ok_at is null and last_status = 'ok';
 
--- Allowed board types; "list" is a community internship list.
+-- Board types are checked by the app (lib/types.ts ATS), so new types need no schema change.
 alter table targets drop constraint if exists targets_ats_check;
-alter table targets add constraint targets_ats_check
-  check (ats in ('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'eightfold', 'workday', 'list'));
 
 create table if not exists jobs (
   id text primary key,

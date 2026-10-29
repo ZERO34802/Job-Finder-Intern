@@ -4,7 +4,18 @@ import { ATS } from "./types";
 const TOKEN_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$/;
 const HOST_RE = /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*\.myworkdayjobs\.com$/i;
 
-export function targetIdFor(input: Pick<TargetInput, "ats" | "boardToken" | "workdayTenant">): string {
+const ORACLE_HOST_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)*\.oraclecloud\.com$/i;
+
+// An Oracle board is one site on one host, e.g. "egug-cx_1".
+function oracleTenant(input: Pick<TargetInput, "workdayHost" | "workdaySite">): string {
+  return `${(input.workdayHost ?? "").trim().split(".")[0]}-${(input.workdaySite ?? "").trim()}`.toLowerCase();
+}
+
+// Workday and Oracle boards are named by tenant; every other board by its token.
+export function targetIdFor(
+  input: Pick<TargetInput, "ats" | "boardToken" | "workdayTenant" | "workdayHost" | "workdaySite">,
+): string {
+  if (input.ats === "oracle") return `oracle:${oracleTenant(input)}`;
   const slug = input.ats === "workday" ? input.workdayTenant : input.boardToken;
   if (!slug) throw new Error("missing board token");
   return `${input.ats}:${slug.toLowerCase()}`;
@@ -31,6 +42,15 @@ export function normalizeTarget(input: TargetInput, existing?: Target | null): T
     lastOkAt: existing?.lastOkAt ?? null,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
   };
+
+  if (input.ats === "oracle") {
+    const host = (input.workdayHost ?? "").trim().toLowerCase();
+    const site = (input.workdaySite ?? "").trim();
+    if (!ORACLE_HOST_RE.test(host)) throw new Error("oracle host must look like egug.fa.us2.oraclecloud.com");
+    if (!TOKEN_RE.test(site)) throw new Error("oracle site is invalid");
+    const tenant = oracleTenant({ workdayHost: host, workdaySite: site });
+    return { ...base, id: `oracle:${tenant}`, boardToken: null, workdayHost: host, workdayTenant: tenant, workdaySite: site };
+  }
 
   if (input.ats === "workday") {
     const host = (input.workdayHost ?? "").trim().toLowerCase();

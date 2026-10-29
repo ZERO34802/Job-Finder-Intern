@@ -1,6 +1,18 @@
 // "list" targets are community internship lists (board token names the feed).
-// Eightfold targets use the careers site's host name as the board token.
-export const ATS = ["greenhouse", "lever", "ashby", "smartrecruiters", "eightfold", "workday", "list"] as const;
+// Eightfold targets use the careers site's host name as the board token. Oracle targets,
+// like Workday ones, use the host/tenant/site fields. Amazon and TikTok are single boards.
+export const ATS = [
+  "greenhouse",
+  "lever",
+  "ashby",
+  "smartrecruiters",
+  "eightfold",
+  "workday",
+  "oracle",
+  "amazon",
+  "tiktok",
+  "list",
+] as const;
 export type Ats = (typeof ATS)[number];
 
 export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "hardware", "quant", "product", "design", "other"] as const;

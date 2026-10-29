@@ -160,7 +160,7 @@ export function createSupabaseStore(): Store {
       return data ? mapTarget(data) : null;
     },
     async upsertTarget(input: TargetInput) {
-      const id = input.ats === "workday" ? `workday:${(input.workdayTenant ?? "").toLowerCase()}` : `${input.ats}:${(input.boardToken ?? "").toLowerCase()}`;
+      const id = normalizeTarget(input).id;
       const existing = await this.getTarget(id);
       const target = normalizeTarget(input, existing);
       const { error } = await db.from("targets").upsert({
