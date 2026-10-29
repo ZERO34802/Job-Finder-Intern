@@ -42,7 +42,7 @@ async function main(): Promise<void> {
       force: process.argv.includes("--force") || Boolean(arg("--target")),
     });
     console.log(
-      `polled ${summary.targets} boards, saw ${summary.jobsSeen}, intern titles ${summary.candidates}, new ${summary.jobsNew}, classified ${summary.classified}, alerted ${summary.alerted}`,
+      `polled ${summary.targets} boards, saw ${summary.jobsSeen}, intern titles ${summary.candidates}, new ${summary.jobsNew}, new boards ${summary.discovered}, classified ${summary.classified}, alerted ${summary.alerted}`,
     );
     for (const error of summary.errors) console.error(`${error.targetId}: ${error.error}`);
   };

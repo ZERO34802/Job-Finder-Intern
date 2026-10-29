@@ -224,7 +224,7 @@ export async function evaluateJobs(store: Store, limit: number, providersIn?: Ll
     const hit = titles.get(key);
     return !hit || (hit.model === "rules" && providers.length > 0);
   });
-  const budget = Math.max(0, envInt("CLASSIFY_BUDGET", 300));
+  const budget = Math.max(0, envInt("CLASSIFY_BUDGET", 600));
   const asked = providers.length > 0 ? await llmTitles(stale.slice(0, budget).map((key) => titleByKey.get(key)!), providers) : [];
   const fresh: Classification[] = [];
   stale.forEach((key, i) => {

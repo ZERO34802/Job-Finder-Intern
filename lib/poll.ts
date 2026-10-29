@@ -1,17 +1,19 @@
 import { evaluateJobs, isCandidateTitle } from "./classify";
 import { notifyDiscord } from "./discord";
 import { envInt, jitteredMs, sleep } from "./jitter";
-import { fetchTargetJobs, toDrafts } from "./sources";
+import { SourceError } from "./http";
+import { fetchList, fetchTargetJobs, LIST_FEEDS, type RemoteJob, toDrafts } from "./sources";
 import { llmProviders } from "./llm";
 import { getStore } from "./store";
 import { isDue } from "./targets";
-import type { Store, Target } from "./types";
+import type { Store, Target, TargetInput } from "./types";
 
 export type PollSummary = {
   targets: number;
   jobsSeen: number;
   candidates: number;
   jobsNew: number;
+  discovered: number;
   classified: number;
   alerted: number;
   errors: { targetId: string; error: string }[];
@@ -38,8 +40,14 @@ function postedRecently(postedAt: string | null): boolean {
 // Boards on a shared API host (all Greenhouse boards hit one host) are split
 // into a few sequential lanes; each Workday tenant is its own host and lane.
 function hostKey(target: Target): string {
-  return target.ats === "workday" ? `workday:${target.workdayHost}` : target.ats;
+  if (target.ats === "workday") return `workday:${target.workdayHost}`;
+  return target.ats === "list" ? `list:${target.boardToken}` : target.ats;
 }
+
+// Boards with intern postings are checked every run; quiet ones every 6 hours.
+// 25 rather than 30 so a slightly early cron run still counts the board as due.
+const HOT_MINUTES = 25;
+const QUIET_MINUTES = 360;
 
 export function buildLanes(targets: Target[], lanesPerSharedHost: number): Target[][] {
   const groups = new Map<string, Target[]>();
@@ -54,7 +62,8 @@ export function buildLanes(targets: Target[], lanesPerSharedHost: number): Targe
     group.forEach((target, i) => split[i % count].push(target));
     lanes.push(...split);
   }
-  return lanes;
+  // Longest lanes start first so they are not left running alone at the end.
+  return lanes.sort((a, b) => b.length - a.length);
 }
 
 async function runPool<T>(items: T[], size: number, work: (item: T) => Promise<void>): Promise<void> {
@@ -65,34 +74,50 @@ async function runPool<T>(items: T[], size: number, work: (item: T) => Promise<v
   await Promise.all(workers);
 }
 
-async function pollOne(store: Store, target: Target, summary: PollSummary): Promise<void> {
+async function pollOne(store: Store, target: Target, summary: PollSummary, found: TargetInput[]): Promise<void> {
   summary.targets++;
   const startedAt = new Date().toISOString();
   try {
-    const remote = await fetchTargetJobs(target);
+    let remote: RemoteJob[];
+    if (target.ats === "list") {
+      const list = await fetchList(target.boardToken ?? "");
+      remote = list.jobs;
+      found.push(...list.boards);
+    } else {
+      remote = await fetchTargetJobs(target);
+    }
     const { drafts } = toDrafts(target, remote);
     // First successful poll of a board: existing openings are not news.
     const baseline = !target.lastOkAt;
+    const list = target.ats === "list";
+    // Lists are curated internships, so their titles skip the intern-word filter.
     const candidates = drafts
-      .filter((draft) => isCandidateTitle(draft.title))
-      .map((draft) => ({ ...draft, quiet: baseline && !postedRecently(draft.postedAt) }));
+      .filter((draft) => list || isCandidateTitle(draft.title))
+      .map((draft) => ({ ...draft, quiet: baseline && !postedRecently(draft.postedAt), looseMatch: list }));
     const result = await store.upsertJobs(candidates);
     summary.jobsSeen += drafts.length;
     summary.candidates += candidates.length;
     summary.jobsNew += result.insertedIds.length;
-    await store.touchTarget(target.id, "ok", null);
-    await store.recordRun({
-      targetId: target.id,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      jobsSeen: drafts.length,
-      jobsNew: result.insertedIds.length,
-      error: null,
-    });
+    await store.touchTarget(target.id, "ok", null, list || candidates.length > 0 ? HOT_MINUTES : QUIET_MINUTES);
+    // Only runs worth reading are kept; thousands of quiet boards per run would fill the free tier.
+    if (result.insertedIds.length > 0) {
+      await store.recordRun({
+        targetId: target.id,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        jobsSeen: drafts.length,
+        jobsNew: result.insertedIds.length,
+        error: null,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     summary.errors.push({ targetId: target.id, error: message });
-    await store.touchTarget(target.id, "error", message.slice(0, 500));
+    await store.touchTarget(target.id, "error", message.slice(0, 500), QUIET_MINUTES);
+    // A board that is gone or a bad link guessed from a list (Workday answers 422) is switched off.
+    if (err instanceof SourceError && (err.status === 404 || err.status === 422)) {
+      await store.setTargetEnabled(target.id, false);
+    }
     await store.recordRun({
       targetId: target.id,
       startedAt,
@@ -106,7 +131,19 @@ async function pollOne(store: Store, target: Target, summary: PollSummary): Prom
 
 async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<PollSummary> {
   const store = getStore();
-  const summary: PollSummary = { targets: 0, jobsSeen: 0, candidates: 0, jobsNew: 0, classified: 0, alerted: 0, errors: [] };
+  const summary: PollSummary = {
+    targets: 0,
+    jobsSeen: 0,
+    candidates: 0,
+    jobsNew: 0,
+    discovered: 0,
+    classified: 0,
+    alerted: 0,
+    errors: [],
+  };
+  await store.addTargets(
+    Object.entries(LIST_FEEDS).map(([feed, config]) => ({ company: config.company, ats: "list" as const, boardToken: feed })),
+  );
   const selected = opts.targetId ? [await store.getTarget(opts.targetId)] : await store.listTargets();
   const targets = selected.filter((target) => target !== null);
   if (opts.targetId && targets.length === 0) throw new Error(`Unknown target ${opts.targetId}`);
@@ -116,12 +153,15 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
     return target.enabled && (opts.force || isDue(target));
   });
   const gapMs = envInt("POLL_GAP_MS", 1200);
-  await runPool(buildLanes(due, envInt("POLL_HOST_LANES", 2)), envInt("POLL_CONCURRENCY", 8), async (lane) => {
+  const found: TargetInput[] = [];
+  await runPool(buildLanes(due, envInt("POLL_HOST_LANES", 2)), envInt("POLL_CONCURRENCY", 16), async (lane) => {
     for (let i = 0; i < lane.length; i++) {
       if (i > 0) await sleep(jitteredMs(gapMs, 0.5));
-      await pollOne(store, lane[i], summary);
+      await pollOne(store, lane[i], summary, found);
     }
   });
+  // New boards are polled from the next run on, starting with a quiet baseline.
+  if (found.length > 0) summary.discovered = await store.addTargets(found);
 
   const providers = await llmProviders();
   summary.classified = await evaluateJobs(store, envInt("EVALUATE_LIMIT", 1000), providers);

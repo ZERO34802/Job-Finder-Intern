@@ -3,11 +3,12 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { canonicalJobUrl, companyKey, dedupeKey, titleCacheKey } from "../lib/canonicalize";
+import { canonicalJobUrl, companyKey, dedupeKey, postingKey, titleCacheKey } from "../lib/canonicalize";
 import { evaluate, evaluateJobs, isCandidateTitle, ruleClassify, ruleDegree, ruleSeason, ruleUs } from "../lib/classify";
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
+import { boardFromUrl } from "../lib/sources";
 import { importTargets, seedStarter } from "../lib/seed";
 import { createSqliteStore } from "../lib/sqlite-store";
 import type { Target } from "../lib/types";
@@ -247,4 +248,88 @@ test("a match needs intern, target family, right season, degree, and the US", ()
   assert.equal(evaluate("a", ruleClassify("Hardware Engineering Intern"), true).match, false);
   assert.equal(evaluate("a", ruleClassify("Senior Software Engineer"), true).match, false);
   assert.equal(evaluate("a", ruleClassify("High School Internship, Software Engineering (Summer 2027)"), true).match, false);
+});
+
+test("posting keys line up a list link with its board posting", () => {
+  assert.equal(postingKey("https://job-boards.greenhouse.io/scaleai/jobs/4567?utm_source=Simplify"), "gh:4567");
+  assert.equal(postingKey("https://scale.com/careers?gh_jid=4567"), "gh:4567");
+  assert.equal(
+    postingKey("https://jobs.lever.co/palantir/1b2c3d4e-0000-4000-8000-123456789abc/apply"),
+    "lever:1b2c3d4e-0000-4000-8000-123456789abc",
+  );
+  assert.equal(
+    postingKey("https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/Software-Intern_JR2001234"),
+    "wd:nvidia:jr2001234",
+  );
+  assert.equal(postingKey("https://jobs.smartrecruiters.com/BoschGroup/744000158594769"), "sr:744000158594769");
+  assert.equal(postingKey("https://go.vansh.nyc/Zo"), null);
+});
+
+test("board links in a list become targets", () => {
+  assert.deepEqual(boardFromUrl("Scale AI", "https://job-boards.greenhouse.io/scaleai/jobs/4567"), {
+    company: "Scale AI",
+    ats: "greenhouse",
+    boardToken: "scaleai",
+  });
+  assert.equal(boardFromUrl("X", "https://boards.greenhouse.io/embed/job_app?for=figma&token=1")?.boardToken, "figma");
+  assert.equal(boardFromUrl("Ramp", "https://jobs.ashbyhq.com/ramp/abc")?.ats, "ashby");
+  assert.deepEqual(boardFromUrl("NVIDIA", "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/x_JR1"), {
+    company: "NVIDIA",
+    ats: "workday",
+    workdayHost: "nvidia.wd5.myworkdayjobs.com",
+    workdayTenant: "nvidia",
+    workdaySite: "NVIDIAExternalCareerSite",
+  });
+  assert.equal(boardFromUrl("Acme", "https://acme.com/careers/123"), null);
+});
+
+test("a list job and its board posting become one row", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "intern-finder-"));
+  const store = createSqliteStore(path.join(dir, "test.db"));
+  assert.equal(await store.addTargets([{ company: "SimplifyJobs list", ats: "list", boardToken: "simplify" }]), 1);
+  assert.equal(await store.addTargets([{ company: "SimplifyJobs list", ats: "list", boardToken: "simplify" }]), 0);
+  const fromList = await store.upsertJobs([
+    {
+      company: "Scale AI",
+      title: "Software Engineering Intern (Summer 2027)",
+      location: "SF",
+      url: "https://job-boards.greenhouse.io/scaleai/jobs/4567?utm_source=Simplify&ref=Simplify",
+      ats: "list",
+      targetId: "list:simplify",
+      externalId: "x",
+      postedAt: null,
+      looseMatch: true,
+    },
+  ]);
+  const fromBoard = await store.upsertJobs([
+    {
+      company: "Scale AI",
+      title: "Software Engineering Intern (Summer 2027)",
+      location: "San Francisco, CA",
+      url: "https://scale.com/careers/4567?gh_jid=4567",
+      ats: "greenhouse",
+      targetId: "greenhouse:scaleai",
+      externalId: "4567",
+      postedAt: null,
+    },
+  ]);
+  const fromOtherList = await store.upsertJobs([
+    {
+      company: "Scale AI, Inc.",
+      title: "Software Engineering Intern (Summer 2027)",
+      location: "San Francisco",
+      url: "https://go.vansh.nyc/abc",
+      ats: "list",
+      targetId: "list:vansh",
+      externalId: "y",
+      postedAt: null,
+      looseMatch: true,
+    },
+  ]);
+  assert.equal(fromList.insertedIds.length, 1);
+  assert.equal(fromBoard.insertedIds.length, 0);
+  assert.equal(fromOtherList.insertedIds.length, 0);
+  const jobs = await store.listJobs({ q: "Scale" });
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].sourceUrls.length, 3);
 });

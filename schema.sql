@@ -4,7 +4,7 @@
 create table if not exists targets (
   id text primary key,
   company text not null,
-  ats text not null check (ats in ('greenhouse', 'lever', 'workday')),
+  ats text not null,
   board_token text,
   workday_host text,
   workday_tenant text,
@@ -21,6 +21,11 @@ create table if not exists targets (
 -- Safe to re-run this whole file. This line upgrades databases created before last_ok_at existed.
 alter table targets add column if not exists last_ok_at timestamptz;
 update targets set last_ok_at = last_polled_at where last_ok_at is null and last_status = 'ok';
+
+-- Allowed board types; "list" is a community internship list.
+alter table targets drop constraint if exists targets_ats_check;
+alter table targets add constraint targets_ats_check
+  check (ats in ('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workday', 'list'));
 
 create table if not exists jobs (
   id text primary key,
@@ -46,6 +51,8 @@ create table if not exists jobs (
   degree text,
   us integer,
   match integer,
+  posting_key text,
+  role_key text,
   alerted_at timestamptz
 );
 
@@ -53,12 +60,17 @@ alter table jobs add column if not exists season text;
 alter table jobs add column if not exists degree text;
 alter table jobs add column if not exists us integer;
 alter table jobs add column if not exists match integer;
+-- Cross-source duplicate keys: the ATS's own posting id, and company + title.
+alter table jobs add column if not exists posting_key text;
+alter table jobs add column if not exists role_key text;
 
 create index if not exists jobs_title_key_idx on jobs (title_key);
 create index if not exists jobs_first_seen_idx on jobs (first_seen_at desc);
 create index if not exists jobs_score_idx on jobs (score desc);
 create index if not exists jobs_classify_model_idx on jobs (classify_model);
 create index if not exists jobs_match_idx on jobs (match);
+create index if not exists jobs_posting_key_idx on jobs (posting_key);
+create index if not exists jobs_role_key_idx on jobs (role_key);
 
 create table if not exists classifications (
   cache_key text primary key,

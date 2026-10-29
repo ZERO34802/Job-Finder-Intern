@@ -52,6 +52,8 @@ export function TargetBoard({ targets }: { targets: Target[] }) {
           <select name="ats" value={ats} onChange={(event) => setAts(event.target.value)}>
             <option value="greenhouse">Greenhouse</option>
             <option value="lever">Lever</option>
+            <option value="ashby">Ashby</option>
+            <option value="smartrecruiters">SmartRecruiters</option>
             <option value="workday">Workday</option>
           </select>
         </label>

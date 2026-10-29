@@ -13,7 +13,7 @@ export function targetIdFor(input: Pick<TargetInput, "ats" | "boardToken" | "wor
 export function normalizeTarget(input: TargetInput, existing?: Target | null): Target {
   const company = input.company.trim();
   if (!company || company.length > 120) throw new Error("company name is required");
-  if (!ATS.includes(input.ats)) throw new Error("ats must be greenhouse, lever, or workday");
+  if (!ATS.includes(input.ats)) throw new Error(`ats must be one of ${ATS.join(", ")}`);
   const interval = input.intervalMinutes ?? existing?.intervalMinutes ?? 360;
   if (!Number.isInteger(interval) || interval < 30 || interval > 10080) {
     throw new Error("interval must be between 30 and 10080 minutes");

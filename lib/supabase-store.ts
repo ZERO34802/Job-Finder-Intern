@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { canonicalJobUrl, dedupeKey, titleCacheKey } from "./canonicalize";
+import { canonicalJobUrl, dedupeKey, postingKey, roleKey, titleCacheKey } from "./canonicalize";
 import { normalizeTarget } from "./targets";
 import type {
   Application,
@@ -45,6 +45,8 @@ type JobRow = {
   degree: string | null;
   us: number | null;
   match: number | null;
+  posting_key: string | null;
+  role_key: string | null;
   alerted_at: string | null;
 };
 
@@ -141,10 +143,16 @@ export function createSupabaseStore(): Store {
   }
 
   return {
+    // Supabase returns at most 1000 rows per request, so targets are read in pages.
     async listTargets() {
-      const { data, error } = await db.from("targets").select("*").order("company");
-      fail(error);
-      return (data ?? []).map(mapTarget);
+      const rows: Record<string, unknown>[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await db.from("targets").select("*").order("id").range(from, from + 999);
+        fail(error);
+        rows.push(...(data ?? []));
+        if (!data || data.length < 1000) break;
+      }
+      return rows.map(mapTarget).sort((a, b) => a.company.localeCompare(b.company));
     },
     async getTarget(id) {
       const { data, error } = await db.from("targets").select("*").eq("id", id).maybeSingle();
@@ -184,7 +192,42 @@ export function createSupabaseStore(): Store {
       const { error } = await db.from("targets").delete().eq("id", id);
       fail(error);
     },
-    async touchTarget(id, status, errorMessage) {
+    async addTargets(inputs: TargetInput[]) {
+      const rows = new Map<string, Record<string, unknown>>();
+      for (const input of inputs) {
+        let target: Target;
+        try {
+          target = normalizeTarget(input);
+        } catch {
+          continue;
+        }
+        rows.set(target.id, {
+          id: target.id,
+          company: target.company,
+          ats: target.ats,
+          board_token: target.boardToken,
+          workday_host: target.workdayHost,
+          workday_tenant: target.workdayTenant,
+          workday_site: target.workdaySite,
+          enabled: target.enabled ? 1 : 0,
+          interval_minutes: target.intervalMinutes,
+          created_at: target.createdAt,
+        });
+      }
+      const existing = new Set<string>();
+      for (const chunk of chunks([...rows.keys()], 200)) {
+        const { data, error } = await db.from("targets").select("id").in("id", chunk);
+        fail(error);
+        for (const row of data ?? []) existing.add(row.id as string);
+      }
+      const fresh = [...rows.values()].filter((row) => !existing.has(row.id as string));
+      for (const chunk of chunks(fresh, 500)) {
+        const { error } = await db.from("targets").upsert(chunk, { onConflict: "id", ignoreDuplicates: true });
+        fail(error);
+      }
+      return fresh.length;
+    },
+    async touchTarget(id, status, errorMessage, intervalMinutes) {
       const now = new Date().toISOString();
       const { error } = await db
         .from("targets")
@@ -193,13 +236,14 @@ export function createSupabaseStore(): Store {
           last_status: status,
           last_error: errorMessage,
           ...(status === "ok" ? { last_ok_at: now } : {}),
+          ...(intervalMinutes ? { interval_minutes: intervalMinutes } : {}),
         })
         .eq("id", id);
       fail(error);
     },
     async upsertJobs(jobs: JobDraft[]) {
       const now = new Date().toISOString();
-      type Entry = { id: string; canonical: string; draft: JobDraft; sources: SourceUrl[] };
+      type Entry = { id: string; canonical: string; posting: string | null; role: string; draft: JobDraft; sources: SourceUrl[] };
       const entries = new Map<string, Entry>();
       const entryByUrl = new Map<string, Entry>();
       for (const draft of jobs) {
@@ -217,7 +261,7 @@ export function createSupabaseStore(): Store {
           same.sources = mergeSources(same.sources, source);
           continue;
         }
-        const entry = { id, canonical, draft, sources: [source] };
+        const entry = { id, canonical, posting: postingKey(canonical), role: roleKey(draft.company, draft.title), draft, sources: [source] };
         entries.set(id, entry);
         entryByUrl.set(canonical, entry);
       }
@@ -235,11 +279,30 @@ export function createSupabaseStore(): Store {
         fail(error);
         for (const row of (data ?? []) as JobRow[]) byUrl.set(row.canonical_url, row);
       }
+      const byPosting = new Map<string, JobRow>();
+      const postings = [...new Set([...entries.values()].flatMap((entry) => (entry.posting ? [entry.posting] : [])))];
+      for (const chunk of chunks(postings, 200)) {
+        const { data, error } = await db.from("jobs").select("*").in("posting_key", chunk);
+        fail(error);
+        for (const row of (data ?? []) as JobRow[]) if (row.posting_key) byPosting.set(row.posting_key, row);
+      }
+      const byRole = new Map<string, JobRow>();
+      const roles = [...new Set([...entries.values()].filter((entry) => entry.draft.looseMatch).map((entry) => entry.role))];
+      for (const chunk of chunks(roles, 200)) {
+        const { data, error } = await db.from("jobs").select("*").in("role_key", chunk);
+        fail(error);
+        for (const row of (data ?? []) as JobRow[]) if (row.role_key) byRole.set(row.role_key, row);
+      }
 
       const inserts: Record<string, unknown>[] = [];
       const updates = new Map<string, JobRow>();
-      for (const { id, canonical, draft, sources } of entries.values()) {
-        const prev = updates.get(id) ?? byId.get(id) ?? byUrl.get(canonical);
+      for (const { id, canonical, posting, role, draft, sources } of entries.values()) {
+        const prev =
+          updates.get(id) ??
+          byId.get(id) ??
+          byUrl.get(canonical) ??
+          (posting ? byPosting.get(posting) : undefined) ??
+          (draft.looseMatch ? byRole.get(role) : undefined);
         if (!prev) {
           inserts.push({
             id,
@@ -256,15 +319,20 @@ export function createSupabaseStore(): Store {
             source_urls: sources,
             title_key: titleCacheKey(draft.title),
             alerted_at: draft.quiet ? now : null,
+            posting_key: posting,
+            role_key: role,
           });
+          if (posting) byPosting.set(posting, inserts[inserts.length - 1] as unknown as JobRow);
+          byRole.set(role, inserts[inserts.length - 1] as unknown as JobRow);
           continue;
         }
         const base = updates.get(prev.id) ?? prev;
         updates.set(prev.id, {
           ...base,
           last_seen_at: now,
-          title: draft.title.trim(),
-          location: draft.location ?? base.location,
+          location: base.location ?? draft.location,
+          posting_key: base.posting_key ?? posting,
+          role_key: base.role_key ?? role,
           source_urls: sources.reduce(mergeSources, readSources(base.source_urls)),
         });
       }

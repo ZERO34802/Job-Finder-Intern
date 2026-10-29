@@ -1,4 +1,5 @@
-export const ATS = ["greenhouse", "lever", "workday"] as const;
+// "list" targets are community internship lists (board token names the feed).
+export const ATS = ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "list"] as const;
 export type Ats = (typeof ATS)[number];
 
 export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "hardware", "quant", "product", "design", "other"] as const;
@@ -70,6 +71,9 @@ export type JobDraft = {
   postedAt: string | null;
   // Stored as already alerted: existing jobs on a board's first successful poll.
   quiet?: boolean;
+  // List feeds format locations differently from boards, so their jobs also
+  // match an existing job by company and title alone.
+  looseMatch?: boolean;
 };
 
 export type Job = {
@@ -181,7 +185,9 @@ export interface Store {
   upsertTarget(input: TargetInput): Promise<Target>;
   setTargetEnabled(id: string, enabled: boolean): Promise<void>;
   deleteTarget(id: string): Promise<void>;
-  touchTarget(id: string, status: string, error: string | null): Promise<void>;
+  // Adds targets whose id is not stored yet; returns how many were added.
+  addTargets(inputs: TargetInput[]): Promise<number>;
+  touchTarget(id: string, status: string, error: string | null, intervalMinutes?: number): Promise<void>;
   upsertJobs(jobs: JobDraft[]): Promise<{ insertedIds: string[] }>;
   listJobs(filter: JobFilter): Promise<Job[]>;
   // Unevaluated jobs first; with upgradeRules, also jobs last judged by rules only.

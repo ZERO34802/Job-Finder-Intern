@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { canonicalJobUrl, dedupeKey, titleCacheKey } from "./canonicalize";
+import { canonicalJobUrl, dedupeKey, postingKey, roleKey, titleCacheKey } from "./canonicalize";
 import type {
   Application,
   ApplicationInput,
@@ -221,6 +221,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
   addColumn("jobs", "match", "INTEGER");
   addColumn("classifications", "season", "TEXT");
   addColumn("classifications", "degree", "TEXT");
+  addColumn("jobs", "posting_key", "TEXT");
+  addColumn("jobs", "role_key", "TEXT");
   db.exec(`
     CREATE TABLE IF NOT EXISTS locations (
       cache_key TEXT PRIMARY KEY,
@@ -230,6 +232,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS jobs_match_idx ON jobs (match);
+    CREATE INDEX IF NOT EXISTS jobs_posting_key_idx ON jobs (posting_key);
+    CREATE INDEX IF NOT EXISTS jobs_role_key_idx ON jobs (role_key);
     -- Titles labelled before season and degree existed are labelled again.
     DELETE FROM classifications WHERE season IS NULL;
     UPDATE jobs SET classify_model = NULL WHERE match IS NULL AND classify_model IS NOT NULL;
@@ -238,6 +242,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
   const getTargetStmt = db.prepare("SELECT * FROM targets WHERE id = ?");
   const getJobStmt = db.prepare("SELECT * FROM jobs WHERE id = ?");
   const getJobByUrl = db.prepare("SELECT * FROM jobs WHERE canonical_url = ?");
+  const getJobByPosting = db.prepare("SELECT * FROM jobs WHERE posting_key = ? LIMIT 1");
+  const getJobByRole = db.prepare("SELECT * FROM jobs WHERE role_key = ? LIMIT 1");
 
   return {
     async listTargets() {
@@ -290,12 +296,44 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
     async deleteTarget(id) {
       db.prepare("DELETE FROM targets WHERE id = ?").run(id);
     },
-    async touchTarget(id, status, error) {
+    async addTargets(inputs: TargetInput[]) {
+      const insert = db.prepare(
+        `INSERT OR IGNORE INTO targets (
+          id, company, ats, board_token, workday_host, workday_tenant, workday_site,
+          enabled, interval_minutes, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      let added = 0;
+      for (const input of inputs) {
+        let target: Target;
+        try {
+          target = normalizeTarget(input);
+        } catch {
+          continue;
+        }
+        const result = insert.run(
+          target.id,
+          target.company,
+          target.ats,
+          target.boardToken,
+          target.workdayHost,
+          target.workdayTenant,
+          target.workdaySite,
+          target.enabled ? 1 : 0,
+          target.intervalMinutes,
+          target.createdAt,
+        );
+        added += Number(result.changes);
+      }
+      return added;
+    },
+    async touchTarget(id, status, error, intervalMinutes) {
       const now = new Date().toISOString();
       db.prepare(
         `UPDATE targets SET last_polled_at = ?, last_status = ?, last_error = ?,
-         last_ok_at = CASE WHEN ? = 'ok' THEN ? ELSE last_ok_at END WHERE id = ?`,
-      ).run(now, status, error, status, now, id);
+         last_ok_at = CASE WHEN ? = 'ok' THEN ? ELSE last_ok_at END,
+         interval_minutes = COALESCE(?, interval_minutes) WHERE id = ?`,
+      ).run(now, status, error, status, now, intervalMinutes ?? null, id);
     },
     async upsertJobs(jobs: JobDraft[]) {
       const insertedIds: string[] = [];
@@ -303,11 +341,12 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       const insert = db.prepare(
         `INSERT INTO jobs (
           id, canonical_url, title, company, location, ats, target_id, external_id, posted_at,
-          first_seen_at, last_seen_at, source_urls, title_key, alerted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          first_seen_at, last_seen_at, source_urls, title_key, alerted_at, posting_key, role_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       const update = db.prepare(
-        `UPDATE jobs SET last_seen_at = ?, title = ?, location = COALESCE(?, location), source_urls = ?, company = ? WHERE id = ?`,
+        `UPDATE jobs SET last_seen_at = ?, title = ?, location = COALESCE(?, location), source_urls = ?, company = ?,
+         posting_key = COALESCE(posting_key, ?), role_key = COALESCE(role_key, ?) WHERE id = ?`,
       );
       for (const draft of jobs) {
         if (!draft.title.trim()) continue;
@@ -319,9 +358,13 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         }
         const source: SourceUrl = { ats: draft.ats, url: canonical, targetId: draft.targetId };
         const id = dedupeKey(draft.company, draft.title, draft.location);
+        const posting = postingKey(canonical);
+        const role = roleKey(draft.company, draft.title);
         const prev =
           (getJobStmt.get(id) as JobRow | undefined) ??
-          (getJobByUrl.get(canonical) as JobRow | undefined);
+          (getJobByUrl.get(canonical) as JobRow | undefined) ??
+          (posting ? (getJobByPosting.get(posting) as JobRow | undefined) : undefined) ??
+          (draft.looseMatch ? (getJobByRole.get(role) as JobRow | undefined) : undefined);
         if (!prev) {
           insert.run(
             id,
@@ -338,11 +381,13 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
             JSON.stringify([source]),
             titleCacheKey(draft.title),
             draft.quiet ? now : null,
+            posting,
+            role,
           );
           insertedIds.push(id);
         } else {
           const sources = mergeSources(readSources(prev.source_urls), source);
-          update.run(now, draft.title.trim(), draft.location, JSON.stringify(sources), prev.company, prev.id);
+          update.run(now, prev.title, prev.location ?? draft.location, JSON.stringify(sources), prev.company, posting, role, prev.id);
         }
       }
       return { insertedIds };

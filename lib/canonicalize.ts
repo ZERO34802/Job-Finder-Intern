@@ -49,6 +49,24 @@ export function companyKey(name: string): string {
     .replace(/\s+/g, " ");
 }
 
+// The ATS's own id for a posting, read from its URL, so the same posting found
+// through a list feed and through its board collapses to one row.
+export function postingKey(url: string): string | null {
+  const gh = url.match(/greenhouse\.io\/.*?jobs\/(\d+)/) ?? url.match(/[?&]gh_jid=(\d+)/);
+  if (gh) return `gh:${gh[1]}`;
+  const uuid = url.match(/(jobs\.lever\.co|jobs\.ashbyhq\.com)\/[^/]+\/([0-9a-f]{8}-[0-9a-f-]{27})/i);
+  if (uuid) return `${uuid[1].startsWith("jobs.lever") ? "lever" : "ashby"}:${uuid[2].toLowerCase()}`;
+  const sr = url.match(/smartrecruiters\.com\/[^/]+\/(\d{6,})/);
+  if (sr) return `sr:${sr[1]}`;
+  const wd = url.match(/\/\/([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com\/.*_([A-Za-z0-9-]*\d[A-Za-z0-9-]*)(?:[/?#]|$)/i);
+  if (wd) return `wd:${wd[1].toLowerCase()}:${wd[2].toLowerCase()}`;
+  return null;
+}
+
+export function roleKey(company: string, title: string): string {
+  return createHash("sha256").update(`${companyKey(company)}|${titleCacheKey(title)}`).digest("hex").slice(0, 24);
+}
+
 export function dedupeKey(company: string, title: string, location: string | null): string {
   const material = [companyKey(company), titleCacheKey(title), titleCacheKey(location ?? "")].join("|");
   return createHash("sha256").update(material).digest("hex").slice(0, 24);
