@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { crawlBoards, hnBoards } from "../lib/discover";
 import { envFloat, envInt, jitteredMs, sleep } from "../lib/jitter";
 import { pollTargets } from "../lib/poll";
 import { seedStarter } from "../lib/seed";
@@ -28,8 +29,21 @@ function arg(name: string): string | undefined {
   return process.argv[index + 1];
 }
 
+async function discover(): Promise<void> {
+  const store = getStore();
+  const fromHn = await hnBoards();
+  console.log(`hacker news: ${fromHn.length} board links, ${await store.addTargets(fromHn)} new boards`);
+  const crawl = await crawlBoards();
+  console.log(`common crawl: ${crawl.boards.length} board links, ${await store.addTargets(crawl.boards)} new boards`);
+  if (crawl.skipped.length > 0) console.log(`common crawl skipped (timeouts): ${crawl.skipped.join(", ")}`);
+}
+
 async function main(): Promise<void> {
   loadEnv();
+  if (process.argv.includes("--discover")) {
+    await discover();
+    return;
+  }
   if (process.argv.includes("--seed")) {
     const added = await seedStarter(getStore());
     console.log(`seeded ${added} new boards`);

@@ -9,6 +9,7 @@ import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
 import { boardFromUrl, parseMarkdownListings } from "../lib/sources";
+import { boardFromCrawlLine, boardsFromHnComment } from "../lib/discover";
 import { importTargets, seedStarter } from "../lib/seed";
 import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
@@ -409,4 +410,20 @@ test("discovered Oracle boards normalize to one id per host and site", () => {
   assert.equal(target.id, "oracle:edbz-cx");
   assert.equal(target.workdayTenant, "edbz-cx");
   assert.throws(() => normalizeTarget({ company: "X", ats: "oracle", workdayHost: "evil.example.com", workdaySite: "CX" }));
+});
+
+test("HN hiring posts and crawl lines yield startup boards", () => {
+  const comment =
+    "Acme Robotics | Software Engineer Intern | SF<p>Apply: <a href=\"https:&#x2F;&#x2F;jobs.ashbyhq.com&#x2F;acme-robotics&#x2F;123\">https:&#x2F;&#x2F;jobs.ashbyhq.com&#x2F;acme-robotics&#x2F;123</a>" +
+    " or https:&#x2F;&#x2F;boards.greenhouse.io&#x2F;embed&#x2F;job_app?for=acmeco";
+  const boards = boardsFromHnComment(comment);
+  assert.deepEqual(boards[0], { company: "Acme Robotics", ats: "ashby", boardToken: "acme-robotics" });
+  assert.deepEqual(boards.find((b) => b.ats === "greenhouse"), { company: "Acme Robotics", ats: "greenhouse", boardToken: "acmeco" });
+  assert.deepEqual(boardFromCrawlLine('{"url": "https://jobs.lever.co/zipline/abc-123"}'), {
+    company: "zipline",
+    ats: "lever",
+    boardToken: "zipline",
+  });
+  assert.equal(boardFromCrawlLine('{"url": "https://boards.greenhouse.io/embed/job_board"}'), null);
+  assert.equal(boardFromCrawlLine("not json"), null);
 });

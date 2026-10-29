@@ -11,7 +11,8 @@
     "start": "next start",
     "poll": "tsx poller/cli.ts",
     "seed": "tsx poller/cli.ts --seed",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "discover": "tsx poller/cli.ts --discover"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
