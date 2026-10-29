@@ -8,7 +8,7 @@ import { evaluate, evaluateJobs, isCandidateTitle, ruleClassify, ruleDegree, rul
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
-import { boardFromUrl } from "../lib/sources";
+import { boardFromUrl, parseMarkdownListings } from "../lib/sources";
 import { importTargets, seedStarter } from "../lib/seed";
 import { createSqliteStore } from "../lib/sqlite-store";
 import type { Target } from "../lib/types";
@@ -360,4 +360,30 @@ test("old jobs are pruned unless they are tracked", async () => {
   assert.equal(await store.pruneJobs(-1), 2);
   const left = await store.listJobs({ limit: 10 });
   assert.deepEqual(left.map((job) => job.id), [insertedIds[0]]);
+});
+
+test("speedyapply markdown tables parse by header name", () => {
+  const md = [
+    "### FAANG+",
+    "",
+    "| Company | Position | Location | Salary | Posting | Age |",
+    "|---|---|---|---|---|---|",
+    '| <a href="https://www.amazon.com"><strong>Amazon</strong></a> | SDE Intern - Summer 2027 | Redmond, WA | $53/hr | <a href="https://www.amazon.jobs/jobs/10587999/apply"><img alt="Apply"/></a> | 6d |',
+    "",
+    "### Other",
+    "",
+    "| Company | Position | Location | Posting | Age |",
+    "|---|---|---|---|---|",
+    '| <a href="https://x.com"><strong>Rivian</strong></a> | Software Engineering Intern | Irvine, CA +1 | <a href="https://jobs.ashbyhq.com/rivianvw.tech/f5aa59d9-4fdc-42d5-931d-efd9e6d96f2f"><img alt="Apply"/></a> | 51d |',
+  ].join("\n");
+  const now = Date.UTC(2026, 9, 29);
+  const items = parseMarkdownListings(md, now);
+  assert.equal(items.length, 2);
+  assert.equal(items[0].company_name, "Amazon");
+  assert.equal(items[0].title, "SDE Intern - Summer 2027");
+  assert.equal(items[0].url, "https://www.amazon.jobs/jobs/10587999/apply");
+  assert.deepEqual(items[0].locations, ["Redmond, WA"]);
+  assert.equal(items[0].date_posted, Math.floor((now - 6 * 86_400_000) / 1000));
+  assert.equal(items[1].company_name, "Rivian");
+  assert.equal(items[1].locations?.[0], "Irvine, CA +1");
 });

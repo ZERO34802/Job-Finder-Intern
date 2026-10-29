@@ -1,5 +1,5 @@
 import type { Ats, JobDraft, Target, TargetInput } from "./types";
-import { fetchJson, SourceError } from "./http";
+import { fetchJson, fetchText, SourceError } from "./http";
 import { jitteredMs, sleep } from "./jitter";
 
 export type RemoteJob = {
@@ -233,8 +233,52 @@ type Listing = {
   season?: string;
 };
 
-// Community lists of open internships; both repos publish the same listings.json shape.
-export const LIST_FEEDS: Record<string, { company: string; url: string; keep: (item: Listing) => boolean }> = {
+// speedyapply publishes Markdown tables (FAANG+, Quant, Other) instead of JSON. Columns
+// are found by header name because the tables do not all have the same ones.
+export function parseMarkdownListings(markdown: string, now = Date.now()): Listing[] {
+  const text = (cell: string) => cell.replace(/<[^>]+>/g, "").replace(/\*\*/g, "").trim();
+  const items: Listing[] = [];
+  let columns: string[] = [];
+  for (const line of markdown.split("\n")) {
+    if (!line.startsWith("|")) {
+      columns = [];
+      continue;
+    }
+    const cells = line.split("|").slice(1, -1).map((cell) => cell.trim());
+    if (cells[0] === "Company") {
+      columns = cells.map((cell) => cell.toLowerCase());
+      continue;
+    }
+    if (columns.length === 0 || cells.every((cell) => /^-*$/.test(cell))) continue;
+    const at = (name: string) => cells[columns.indexOf(name)] ?? "";
+    const url = at("posting").match(/href="([^"]+)"/)?.[1];
+    const age = Number(at("age").match(/^(\d+)d$/)?.[1]);
+    const company = text(at("company"));
+    const title = text(at("position"));
+    if (!url || !company || !title) continue;
+    items.push({
+      id: url,
+      title,
+      company_name: company,
+      url,
+      locations: text(at("location")) ? [text(at("location"))] : [],
+      date_posted: Number.isFinite(age) ? Math.floor((now - age * 86_400_000) / 1000) : undefined,
+      active: true,
+    });
+  }
+  return items;
+}
+
+type ListFeed = {
+  company: string;
+  url: string;
+  keep: (item: Listing) => boolean;
+  parse?: (body: string) => Listing[];
+};
+
+// Community lists of open internships. SimplifyJobs and vanshb03 publish the same
+// listings.json shape; speedyapply's US internship tables are parsed from its README.
+export const LIST_FEEDS: Record<string, ListFeed> = {
   simplify: {
     company: "SimplifyJobs list",
     url: "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/.github/scripts/listings.json",
@@ -247,6 +291,12 @@ export const LIST_FEEDS: Record<string, { company: string; url: string; keep: (i
     company: "vanshb03 list",
     url: "https://raw.githubusercontent.com/vanshb03/Summer2027-Internships/dev/.github/scripts/listings.json",
     keep: (item) => !item.season || item.season === "Summer",
+  },
+  speedyapply: {
+    company: "speedyapply list",
+    url: "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/README.md",
+    keep: () => true,
+    parse: (body) => parseMarkdownListings(body),
   },
 };
 
@@ -287,7 +337,7 @@ export function boardFromUrl(company: string, raw: string): TargetInput | null {
 export async function fetchList(feed: string): Promise<ListResult> {
   const config = LIST_FEEDS[feed];
   if (!config) throw new Error(`unknown list feed ${feed}`);
-  const items = await fetchJson<Listing[]>(config.url);
+  const items = config.parse ? config.parse(await fetchText(config.url)) : await fetchJson<Listing[]>(config.url);
   if (!Array.isArray(items)) throw new Error(`${feed} list is not an array`);
   const jobs: RemoteJob[] = [];
   const boards = new Map<string, TargetInput>();
