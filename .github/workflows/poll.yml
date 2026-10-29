@@ -1,0 +1,43 @@
+name: Poll job boards
+
+on:
+  schedule:
+    # GitHub may start scheduled runs 5-20 minutes late under load.
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+# Never run two polls at once; a late run waits for the previous one.
+concurrency:
+  group: poll
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write # only for the keepalive step below
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Poll
+        run: npm run poll -- --force
+        env:
+          STORE: supabase
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+      # GitHub disables scheduled workflows after 60 days without repo activity.
+      # Re-enabling through the API resets that clock without a dummy commit.
+      - name: Keepalive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        run: gh workflow enable poll.yml --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

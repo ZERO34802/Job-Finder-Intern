@@ -1,0 +1,11 @@
+[Unit]
+Description=Intern Finder ATS poll
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/intern-finder
+EnvironmentFile=-/opt/intern-finder/.env
+ExecStart=/usr/bin/npm run poll --silent -- --force
+Nice=10
