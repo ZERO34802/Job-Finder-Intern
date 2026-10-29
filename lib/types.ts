@@ -1,5 +1,6 @@
 // "list" targets are community internship lists (board token names the feed).
-export const ATS = ["greenhouse", "lever", "ashby", "smartrecruiters", "workday", "list"] as const;
+// Eightfold targets use the careers site's host name as the board token.
+export const ATS = ["greenhouse", "lever", "ashby", "smartrecruiters", "eightfold", "workday", "list"] as const;
 export type Ats = (typeof ATS)[number];
 
 export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "hardware", "quant", "product", "design", "other"] as const;

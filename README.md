@@ -1,6 +1,6 @@
 # Intern Finder
 
-Watches about 2,000 company career boards and two community internship lists for **Summer 2027 software, ML, and data internships in the US** that are open to undergrad and master's students. New matches go to Discord, and a dashboard keeps the full list and an application tracker.
+Watches about 2,000 company career boards (Greenhouse, Lever, Ashby, SmartRecruiters, Eightfold, Workday) and two community internship lists for **Summer 2027 software, ML, and data internships in the US** that are open to undergrad and master's students. New matches go to Discord, and a dashboard keeps the full list and an application tracker.
 
 It runs on free tiers only: GitHub Actions polls, Supabase stores, Groq labels titles, Vercel hosts the dashboard.
 
@@ -22,6 +22,7 @@ cron-job.org (every 30 min) ──▶ GitHub Actions: npm run poll
 | Lever | `api.lever.co/v0/postings/{token}` | |
 | Ashby | `api.ashbyhq.com/posting-api/job-board/{name}` | |
 | SmartRecruiters | `api.smartrecruiters.com/v1/companies/{id}/postings?q=intern` | intern search only |
+| Eightfold | `{host}/api/apply/v2/jobs`, or the newer `{host}/api/pcsx/search` | Netflix, Qualcomm, PayPal, ...; Microsoft blocks non-browser clients, so it comes from the lists |
 | Workday | public `wday/cxs` search for intern, internship, co-op | slowest source |
 | SimplifyJobs list | `listings.json` from `SimplifyJobs/Summer2027-Internships` | Summer 2027 and undated postings |
 | vanshb03 list | `listings.json` from `vanshb03/Summer2027-Internships` | links are `go.vansh.nyc` short links |

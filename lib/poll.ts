@@ -41,7 +41,9 @@ function postedRecently(postedAt: string | null): boolean {
 // into a few sequential lanes; each Workday tenant is its own host and lane.
 function hostKey(target: Target): string {
   if (target.ats === "workday") return `workday:${target.workdayHost}`;
-  return target.ats === "list" ? `list:${target.boardToken}` : target.ats;
+  // Each list and each Eightfold site is its own host.
+  if (target.ats === "list" || target.ats === "eightfold") return `${target.ats}:${target.boardToken}`;
+  return target.ats;
 }
 
 // Boards with intern postings are checked every run; quiet ones every 6 hours.
@@ -57,7 +59,7 @@ export function buildLanes(targets: Target[], lanesPerSharedHost: number): Targe
   }
   const lanes: Target[][] = [];
   for (const [key, group] of groups) {
-    const count = key.startsWith("workday:") ? 1 : Math.max(1, Math.min(lanesPerSharedHost, group.length));
+    const count = key.includes(":") ? 1 : Math.max(1, Math.min(lanesPerSharedHost, group.length));
     const split: Target[][] = Array.from({ length: count }, () => []);
     group.forEach((target, i) => split[i % count].push(target));
     lanes.push(...split);

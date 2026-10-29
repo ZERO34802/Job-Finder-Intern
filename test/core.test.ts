@@ -262,6 +262,7 @@ test("posting keys line up a list link with its board posting", () => {
     "wd:nvidia:jr2001234",
   );
   assert.equal(postingKey("https://jobs.smartrecruiters.com/BoschGroup/744000158594769"), "sr:744000158594769");
+  assert.equal(postingKey("https://explore.jobs.netflix.net/careers/job/790318904468"), "ef:790318904468");
   assert.equal(postingKey("https://go.vansh.nyc/Zo"), null);
 });
 
@@ -281,6 +282,12 @@ test("board links in a list become targets", () => {
     workdaySite: "NVIDIAExternalCareerSite",
   });
   assert.equal(boardFromUrl("Acme", "https://acme.com/careers/123"), null);
+  assert.deepEqual(boardFromUrl("Netflix", "https://explore.jobs.netflix.net/careers/job/790318904468"), {
+    company: "Netflix",
+    ats: "eightfold",
+    boardToken: "explore.jobs.netflix.net",
+  });
+  assert.equal(boardFromUrl("Qualcomm", "https://qualcomm.eightfold.ai/careers?pid=446721064018")?.boardToken, "qualcomm.eightfold.ai");
 });
 
 test("a list job and its board posting become one row", async () => {

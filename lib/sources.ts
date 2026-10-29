@@ -1,5 +1,6 @@
 import type { Ats, JobDraft, Target, TargetInput } from "./types";
-import { fetchJson } from "./http";
+import { fetchJson, SourceError } from "./http";
+import { jitteredMs, sleep } from "./jitter";
 
 export type RemoteJob = {
   externalId: string;
@@ -169,6 +170,56 @@ export async function fetchSmartRecruiters(company: string): Promise<RemoteJob[]
   return jobs;
 }
 
+type EightfoldPosition = {
+  id?: number;
+  name?: string;
+  location?: string;
+  locations?: string[];
+  t_create?: number;
+  postedTs?: number;
+  canonicalPositionUrl?: string;
+  positionUrl?: string;
+};
+
+function eightfoldJob(host: string, job: EightfoldPosition): RemoteJob | null {
+  if (!job.id || !job.name) return null;
+  const path = job.positionUrl ?? `/careers/job/${job.id}`;
+  const created = job.t_create ?? job.postedTs;
+  return {
+    externalId: String(job.id),
+    title: job.name,
+    url: job.canonicalPositionUrl ?? `https://${host}${path}`,
+    location: job.locations?.length ? job.locations.join("; ") : job.location ?? null,
+    postedAt: created ? new Date(created * 1000).toISOString() : null,
+  };
+}
+
+// Eightfold sites (Netflix, Qualcomm, ...) serve an older jobs API, or a newer "PCSX"
+// one that needs the company's domain and pages 10 results at a time.
+export async function fetchEightfold(host: string): Promise<RemoteJob[]> {
+  const base = `https://${host}/api`;
+  try {
+    const older = await fetchJson<{ positions?: EightfoldPosition[] }>(`${base}/apply/v2/jobs?query=intern&start=0&num=100`);
+    if (Array.isArray(older.positions)) return older.positions.flatMap((job) => eightfoldJob(host, job) ?? []);
+  } catch (err) {
+    // Sites on the newer API answer the older one with 401/403 "Not authorized for PCSX".
+    if (!(err instanceof SourceError && (err.status === 401 || err.status === 403))) throw err;
+  }
+  const labels = host.split(".");
+  const domain = host.endsWith(".eightfold.ai") ? `${labels[0]}.com` : labels.slice(-2).join(".");
+  const jobs: RemoteJob[] = [];
+  for (let start = 0; start < 200; start += 10) {
+    const page = await fetchJson<{ data?: { positions?: EightfoldPosition[]; count?: number } }>(
+      `${base}/pcsx/search?domain=${encodeURIComponent(domain)}&query=intern&location=&start=${start}`,
+    );
+    const positions = page.data?.positions ?? [];
+    jobs.push(...positions.flatMap((job) => eightfoldJob(host, job) ?? []));
+    if (positions.length < 10 || start + 10 >= (page.data?.count ?? 0)) break;
+    await sleep(jitteredMs(600, 0.3));
+  }
+  return jobs;
+}
+
 type Listing = {
   id?: string;
   title?: string;
@@ -220,6 +271,10 @@ export function boardFromUrl(company: string, raw: string): TargetInput | null {
   if ((host === "jobs.smartrecruiters.com" || host === "careers.smartrecruiters.com") && first) {
     return { company, ats: "smartrecruiters", boardToken: first };
   }
+  // Eightfold job links look like https://<host>/careers/job/<12-digit id>.
+  if (host.endsWith(".eightfold.ai") || /^\/careers\/job\/\d{11,}/.test(url.pathname)) {
+    return { company, ats: "eightfold", boardToken: host };
+  }
   const wd = host.match(/^([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com$/);
   if (wd) {
     const parts = url.pathname.split("/").filter(Boolean);
@@ -269,6 +324,10 @@ export async function fetchTargetJobs(target: Target): Promise<RemoteJob[]> {
   if (target.ats === "smartrecruiters") {
     if (!target.boardToken) throw new Error("smartrecruiters target is missing a company id");
     return fetchSmartRecruiters(target.boardToken);
+  }
+  if (target.ats === "eightfold") {
+    if (!target.boardToken) throw new Error("eightfold target is missing a host");
+    return fetchEightfold(target.boardToken);
   }
   if (target.ats === "list") {
     if (!target.boardToken) throw new Error("list target is missing a feed name");

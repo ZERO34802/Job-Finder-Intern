@@ -25,7 +25,7 @@ update targets set last_ok_at = last_polled_at where last_ok_at is null and last
 -- Allowed board types; "list" is a community internship list.
 alter table targets drop constraint if exists targets_ats_check;
 alter table targets add constraint targets_ats_check
-  check (ats in ('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'workday', 'list'));
+  check (ats in ('greenhouse', 'lever', 'ashby', 'smartrecruiters', 'eightfold', 'workday', 'list'));
 
 create table if not exists jobs (
   id text primary key,

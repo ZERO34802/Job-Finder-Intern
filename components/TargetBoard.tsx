@@ -54,6 +54,7 @@ export function TargetBoard({ targets }: { targets: Target[] }) {
             <option value="lever">Lever</option>
             <option value="ashby">Ashby</option>
             <option value="smartrecruiters">SmartRecruiters</option>
+            <option value="eightfold">Eightfold (board token = site host)</option>
             <option value="workday">Workday</option>
           </select>
         </label>

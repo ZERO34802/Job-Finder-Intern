@@ -56,6 +56,8 @@ export function postingKey(url: string): string | null {
   if (gh) return `gh:${gh[1]}`;
   const uuid = url.match(/(jobs\.lever\.co|jobs\.ashbyhq\.com)\/[^/]+\/([0-9a-f]{8}-[0-9a-f-]{27})/i);
   if (uuid) return `${uuid[1].startsWith("jobs.lever") ? "lever" : "ashby"}:${uuid[2].toLowerCase()}`;
+  const ef = url.match(/\/careers\/job\/(\d{11,})/);
+  if (ef) return `ef:${ef[1]}`;
   const sr = url.match(/smartrecruiters\.com\/[^/]+\/(\d{6,})/);
   if (sr) return `sr:${sr[1]}`;
   const wd = url.match(/\/\/([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com\/.*_([A-Za-z0-9-]*\d[A-Za-z0-9-]*)(?:[/?#]|$)/i);
