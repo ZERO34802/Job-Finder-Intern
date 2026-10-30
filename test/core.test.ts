@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { canonicalJobUrl, companyKey, dedupeKey, postingKey, titleCacheKey } from "../lib/canonicalize";
-import { evaluate, evaluateJobs, isCandidateTitle, ruleClassify, ruleDegree, ruleSeason, ruleUs } from "../lib/classify";
+import { evaluate, evaluateJobs, withRules, isCandidateTitle, ruleClassify, ruleDegree, ruleSeason, ruleUs } from "../lib/classify";
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
@@ -211,6 +211,12 @@ test("season and degree come from the title", () => {
   assert.equal(ruleSeason("Software Engineer, Intern"), "unspecified");
   assert.equal(ruleSeason("Software Engineer, Intern (Summer or Winter)"), "unspecified");
   assert.equal(ruleSeason("Software Engineering Intern, Compiler Verification - Spring 2027"), "other");
+  assert.equal(ruleSeason("Co-op, Embedded Software Engineering: January-June 2027 (Onsite)"), "other");
+  assert.equal(ruleSeason("Software Development Co-op (Jan '27 Start)"), "other");
+  assert.equal(ruleSeason("AI Software Engineering Co-op - 6 months - 8 months"), "other");
+  assert.equal(ruleSeason("Software Developer - Java Intern - June 2027"), "summer_2027");
+  assert.equal(ruleSeason("Accenture Internship Program - May to Aug 2027"), "summer_2027");
+  assert.equal(ruleSeason("Summer 2027 IT Intern (May 2028 Graduates)"), "summer_2027");
   assert.equal(ruleDegree("PhD GenAI Research Scientist Intern"), "phd_only");
   assert.equal(ruleDegree("Research Intern (MS/PhD)"), "any");
   assert.equal(ruleDegree("Software Engineer Intern"), "any");
@@ -250,6 +256,18 @@ test("a match needs intern, target family, right season, degree, and the US", ()
   assert.equal(evaluate("a", ruleClassify("Hardware Engineering Intern"), true).match, false);
   assert.equal(evaluate("a", ruleClassify("Senior Software Engineer"), true).match, false);
   assert.equal(evaluate("a", ruleClassify("High School Internship, Software Engineering (Summer 2027)"), true).match, false);
+});
+
+test("rules override stored labels for engineering outside software and fellowships", () => {
+  const label = (title: string) => withRules(title, { ...ruleClassify("Software Engineer Intern"), roleFamily: "swe" });
+  assert.equal(label("Civil Engineer Intern (Summer 2027)").roleFamily, "other");
+  assert.equal(label("GIS Intern").roleFamily, "other");
+  assert.equal(label("Project Engineer Intern - Mission Critical").roleFamily, "other");
+  assert.equal(label("GIS Software Developer Intern").roleFamily, "swe");
+  assert.equal(label("Embedded Firmware and Controls Engineer Intern").roleFamily, "swe");
+  assert.equal(label("Summer Intern - IT Manufacturing Systems").roleFamily, "swe");
+  assert.equal(label("Research Fellow in Surgical AI").isIntern, false);
+  assert.equal(label("Data Science & Machine Learning Fellow Intern").isIntern, true);
 });
 
 test("posting keys line up a list link with its board posting", () => {

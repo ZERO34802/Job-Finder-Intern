@@ -41,14 +41,33 @@ const NAMED_ROLES: Array<[RegExp, RoleFamily]> = [
   [/\b(software (engineer|developer)\w*|security engineer\w*)\b/i, "swe"],
 ];
 
-// Hard rules that override any model label: high school programs are out,
-// research titles with AI terms are ML research, and named roles keep their family.
+// Engineering outside software ("Civil Engineer Intern", "GIS Intern"); the rule fallback
+// and the models both tend to file these under swe.
+const OFF_TARGET_RE =
+  /\b(civil|structural|geotechnical|mechanical|manufacturing|chemical|chemist|process engineer\w*|project engineer\w*|field engineer\w*|safety engineer\w*|controls engineer\w*|power electronics|transmission|preconstruction|scheduling engineer\w*|sustaining engineer\w*|aerospace engineer\w*|environmental|construction|gis|geospatial|surveying|utilities)\b/i;
+const SOFTWARE_TERM_RE =
+  /\b(software|develop\w*|sw|programming|application|data|machine learning|ml|ai|agentic|computer science|computer vision|firmware|embedded|robot\w*|autonomy|autonomous)\b/i;
+// Postdoc-style fellowships are listed beside internships but are not student roles.
+const FELLOW_RE = /\b(fellow|fellowship|postdoc\w*|post-?doctoral)\b/i;
+
+// Hard rules that override any model label: high school programs and fellowships are out,
+// research titles with AI terms are ML research, named roles keep their family, and
+// engineering outside software is other.
 function refine(title: string, family: RoleFamily, isIntern: boolean): { family: RoleFamily; isIntern: boolean } {
   const named = NAMED_ROLES.find(([re]) => re.test(title))?.[1];
   let refined = family;
   if (named && !TARGET_FAMILIES.includes(family)) refined = named;
   else if (family === "research" && AI_RESEARCH_RE.test(title)) refined = "ml";
-  return { family: refined, isIntern: isIntern && !HIGH_SCHOOL_RE.test(title) };
+  if (OFF_TARGET_RE.test(title) && !SOFTWARE_TERM_RE.test(title) && !/\bIT\b/.test(title)) refined = "other";
+  const fellow = FELLOW_RE.test(title) && !INTERN_RE.test(title);
+  return { family: refined, isIntern: isIntern && !HIGH_SCHOOL_RE.test(title) && !fellow };
+}
+
+// Applies the rules to a stored label, so rule changes reach titles labelled before them.
+export function withRules(title: string, verdict: TitleVerdict): TitleVerdict {
+  const { family, isIntern } = refine(title, verdict.roleFamily, verdict.isIntern);
+  const seniority = isIntern || verdict.seniority !== "intern" ? verdict.seniority : "other";
+  return { ...verdict, isIntern, roleFamily: family, seniority, season: ruleSeason(title), degree: ruleDegree(title) };
 }
 
 // Only intern-looking titles are stored; everything else on a board is skipped.
@@ -56,12 +75,23 @@ export function isCandidateTitle(title: string): boolean {
   return INTERN_RE.test(title);
 }
 
+// "may" is only read as a month next to a year or range ("May 2027", "May - December").
+const MONTH_RE =
+  /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may(?=\s*(?:[-–/]|to\b|'?\d))|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/;
+const SUMMER_START = ["may", "jun", "jul"];
+
 export function ruleSeason(title: string): Season {
   const t = title.toLowerCase();
   if (/summer\W*(20)?27\b|\b2027\W*summer/.test(t)) return "summer_2027";
   if (/\b2026\b|summer\W*(20)?26\b/.test(t)) return "other";
   // "Summer or Winter" still includes summer.
   if (/\b(fall|autumn|spring|winter)\b/.test(t) && !/\bsummer\b/.test(t)) return "other";
+  // Terms of five months or more ("6 months", "12-Month") run past a summer break.
+  const months = t.match(/\b(\d{1,2})[\s-]*months?\b/);
+  if (months && Number(months[1]) >= 5) return "other";
+  // A named start month outside May to July ("January - June 2027", "Jan '27 Start") is not summer.
+  const start = t.match(MONTH_RE)?.[1];
+  if (start && !SUMMER_START.includes(start.slice(0, 3))) return "other";
   if (/\b2027\b/.test(t)) return "summer_2027";
   return "unspecified";
 }
@@ -260,7 +290,7 @@ export async function evaluateJobs(store: Store, limit: number, providersIn?: Ll
     if (!title) continue;
     const ruled = usByRules(job);
     const us = ruled ?? (job.location ? places.get(titleCacheKey(job.location))?.us ?? null : null);
-    rows.push(evaluate(job.id, title, us));
+    rows.push(evaluate(job.id, withRules(job.title, title), us));
   }
   await store.saveEvaluations(rows);
   return rows.length;
