@@ -1,4 +1,21 @@
 import type { Job } from "./types";
+import { sleep } from "./jitter";
+
+// Discord shows at most 10 embeds per message, so a batch is split across messages
+// rather than cut off; every match in the batch gets its own card.
+const EMBEDS_PER_MESSAGE = 10;
+
+function embed(job: Job) {
+  return {
+    title: job.title.slice(0, 250),
+    url: job.canonicalUrl,
+    description: [job.company, job.location, job.roleFamily, job.season === "summer_2027" ? "Summer 2027" : null]
+      .filter(Boolean)
+      .join(" · ")
+      .slice(0, 300),
+    color: 0x0e6b52,
+  };
+}
 
 export async function notifyDiscord(jobs: Job[]): Promise<number> {
   const webhook = process.env.DISCORD_WEBHOOK_URL?.trim();
@@ -13,29 +30,25 @@ export async function notifyDiscord(jobs: Job[]): Promise<number> {
   if (url.protocol !== "https:" || !hostOk || !url.pathname.startsWith("/api/webhooks/")) {
     throw new Error("DISCORD_WEBHOOK_URL must be an https://discord.com/api/webhooks/ URL");
   }
-  const shown = jobs.slice(0, 8);
-  const extra = jobs.length - shown.length;
-  const res = await fetch(webhook, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    signal: AbortSignal.timeout(15_000),
-    body: JSON.stringify({
-      username: "Intern Finder",
-      content:
-        extra > 0
-          ? `${jobs.length} new internship matches. ${extra} more are in the dashboard.`
-          : `${shown.length} new internship match${shown.length === 1 ? "" : "es"}.`,
-      embeds: shown.map((job) => ({
-        title: job.title.slice(0, 250),
-        url: job.canonicalUrl,
-        description: [job.company, job.location, job.roleFamily, job.season === "summer_2027" ? "Summer 2027" : null]
-          .filter(Boolean)
-          .join(" · ")
-          .slice(0, 300),
-        color: 0x0e6b52,
-      })),
-    }),
-  });
-  if (!res.ok) throw new Error(`discord webhook returned ${res.status}`);
-  return shown.length;
+  const parts = Math.ceil(jobs.length / EMBEDS_PER_MESSAGE);
+  let sent = 0;
+  for (let part = 0; part < parts; part++) {
+    const batch = jobs.slice(part * EMBEDS_PER_MESSAGE, (part + 1) * EMBEDS_PER_MESSAGE);
+    const heading = `${jobs.length} new internship match${jobs.length === 1 ? "" : "es"}.`;
+    const res = await fetch(webhook, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: AbortSignal.timeout(15_000),
+      body: JSON.stringify({
+        username: "Intern Finder",
+        content: parts > 1 ? `${heading} (${part + 1}/${parts})` : heading,
+        embeds: batch.map(embed),
+      }),
+    });
+    if (!res.ok) throw new Error(`discord webhook returned ${res.status}`);
+    sent += batch.length;
+    // Webhooks allow about 5 messages per 2 seconds.
+    if (part + 1 < parts) await sleep(700);
+  }
+  return sent;
 }
