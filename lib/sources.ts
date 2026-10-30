@@ -75,9 +75,16 @@ type WorkdayPosting = {
   bulletFields?: string[];
 };
 
+// postedOn is relative text: "Posted Today", "Posted Yesterday", "Posted 3 Days Ago", "Posted 30+ Days Ago".
+function olderThanYesterday(postedOn: string | undefined): boolean {
+  return /\d+\+? Days? Ago/i.test(postedOn ?? "");
+}
+
 export async function fetchWorkday(host: string, tenant: string, site: string): Promise<RemoteJob[]> {
   // Workday search is the slow source, so it asks only for intern terms, 3 pages each.
-  const queries = ["intern", "internship", "co-op"];
+  // Term results are ranked by relevance, so a new posting can sit beyond page 3; a blank
+  // search is ranked newest first, so it is read too, until it reaches older postings.
+  const queries = ["", "intern", "internship", "co-op"];
   const seen = new Map<string, RemoteJob>();
   for (const searchText of queries) {
     for (let offset = 0; offset < 60; offset += 20) {
@@ -105,6 +112,7 @@ export async function fetchWorkday(host: string, tenant: string, site: string): 
         }
       }
       if (postings.length < 20) break;
+      if (!searchText && olderThanYesterday(postings.at(-1)?.postedOn)) break;
     }
   }
   return [...seen.values()];
