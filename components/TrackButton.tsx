@@ -17,11 +17,11 @@ export function TrackButton({ jobId }: { jobId: string }) {
       setMessage(data.error || "Could not track");
       return;
     }
-    window.location.href = "/applications";
+    window.location.href = "/applied?status=saved";
   }
 
   return (
-    <button className="btn" type="button" onClick={() => void track()}>
+    <button className="btn small" type="button" onClick={() => void track()}>
       {message || "Track"}
     </button>
   );

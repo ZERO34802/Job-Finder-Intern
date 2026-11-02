@@ -34,7 +34,7 @@ export default async function JobsPage({
   return (
     <main>
       <p className="lede">A match is a Summer 2027 software, ML, or data internship in the US, open to undergrad or master&apos;s students. Newest postings come first. Tick Applied once you have applied and the role moves to the Applied page. Untick Matches only to see every stored internship and why it was left out. The same company, title, and location collapse to one row.</p>
-      <form className="toolbar" action="/jobs">
+      <form className="toolbar plain" action="/jobs">
         <input name="q" defaultValue={q} placeholder="Title or company" />
         <select name="family" defaultValue={family}>
           <option value="">All families</option>
@@ -62,18 +62,18 @@ export default async function JobsPage({
                 <th>Score</th>
                 <th>Sources</th>
                 <th></th>
-                <th></th>
+                <th className="check">Applied</th>
               </tr>
             </thead>
             <tbody>
               {jobs.map(({ job, posted }) => (
-                <AppliedRow key={job.id} jobId={job.id} applied={false}>
+                <AppliedRow key={job.id} jobId={job.id}>
                   <td>
                     <a className="title-link" href={job.canonicalUrl} target="_blank" rel="noreferrer">{job.title}</a>
                     <span className="sub">{job.company}{job.location ? ` · ${job.location}` : ""}</span>
                     {job.classifyReason ? <span className="sub">{job.match ? "" : "Left out: "}{job.classifyReason}</span> : null}
                   </td>
-                  <td title={new Date(posted).toLocaleString()}>{timeAgo(posted)}</td>
+                  <td className="when" title={new Date(posted).toLocaleString()}>{timeAgo(posted)}</td>
                   <td><span className="pill neutral">{job.roleFamily ?? "unsorted"}</span></td>
                   <td>{job.score === null ? "—" : Math.round(job.score * 100)}</td>
                   <td>{job.sourceUrls.length}</td>
