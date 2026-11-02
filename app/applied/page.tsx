@@ -1,4 +1,5 @@
 import { AppliedRow } from "@/components/AppliedRow";
+import { AddApplication, ImportApplications } from "@/components/ImportApplications";
 import { isApplied, postedTime, timeAgo } from "@/lib/posted";
 import { getStore } from "@/lib/store";
 
@@ -11,8 +12,10 @@ export default async function AppliedPage() {
     <main>
       <p className="lede">
         Internships you ticked as applied, most recent first. Open a posting to check on it, or untick Applied to move a
-        role back to the Jobs page (its notes are kept). Status and notes can be changed on the Applications page.
+        role back to the Jobs page (its notes are kept). Status, referral and notes can be changed on the Applications page.
       </p>
+      <ImportApplications />
+      <AddApplication />
       <div className="table-wrap">
         {applied.length === 0 ? (
           <div className="empty">Nothing here yet. Tick Applied on the Jobs page after you apply.</div>
@@ -39,7 +42,10 @@ export default async function AppliedPage() {
                     </td>
                     <td title={new Date(posted).toLocaleString()}>{timeAgo(posted)}</td>
                     <td title={new Date(marked).toLocaleString()}>{timeAgo(marked)}</td>
-                    <td><span className="pill neutral">{item.status}</span></td>
+                    <td>
+                      <span className="pill neutral">{item.status}</span>
+                      {item.referral !== "none" ? <span className="pill">{item.referral === "referred" ? "Referred" : "Referral requested"}</span> : null}
+                    </td>
                   </AppliedRow>
                 );
               })}

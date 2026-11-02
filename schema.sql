@@ -107,6 +107,10 @@ create table if not exists applications (
   updated_at timestamptz not null default now()
 );
 
+-- Referral is tracked apart from the status.
+alter table applications add column if not exists referral text not null default 'none'
+  check (referral in ('none', 'requested', 'referred'));
+
 create table if not exists poll_runs (
   id bigint generated always as identity primary key,
   target_id text not null,

@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { canonicalJobUrl, dedupeKey, postingKey, roleKey, titleCacheKey } from "./canonicalize";
+import { canonicalJobUrl, dedupeKey, manualJobId, postingKey, roleKey, titleCacheKey } from "./canonicalize";
 import { normalizeTarget } from "./targets";
 import type {
   Application,
@@ -11,15 +11,18 @@ import type {
   JobEvaluation,
   JobDraft,
   JobFilter,
+  JobSource,
   LocationVerdict,
+  ManualJobInput,
   PollRun,
+  Referral,
   SourceUrl,
   Stats,
   Store,
   Target,
   TargetInput,
 } from "./types";
-import { APPLICATION_STATUSES } from "./types";
+import { APPLICATION_STATUSES, REFERRALS } from "./types";
 
 type JobRow = {
   id: string;
@@ -27,7 +30,7 @@ type JobRow = {
   title: string;
   company: string;
   location: string | null;
-  ats: Ats;
+  ats: JobSource;
   target_id: string | null;
   external_id: string | null;
   posted_at: string | null;
@@ -348,8 +351,23 @@ export function createSupabaseStore(): Store {
           continue;
         }
         const base = updates.get(prev.id) ?? prev;
+        // A hand-added job takes the board's details the first time a board lists it.
+        const fromBoard =
+          base.ats === "manual"
+            ? {
+                title: draft.title.trim(),
+                company: draft.company.trim(),
+                title_key: titleCacheKey(draft.title),
+                ats: draft.ats,
+                target_id: draft.targetId,
+                external_id: draft.externalId,
+                posted_at: base.posted_at ?? draft.postedAt,
+                classify_model: null,
+              }
+            : {};
         updates.set(prev.id, {
           ...base,
+          ...fromBoard,
           last_seen_at: now,
           location: base.location ?? draft.location,
           posting_key: base.posting_key ?? posting,
@@ -515,10 +533,94 @@ export function createSupabaseStore(): Store {
       const { error } = await db.from("jobs").update({ alerted_at: new Date().toISOString() }).in("id", ids);
       fail(error);
     },
+    async findJobIds(urls) {
+      const byCanonical = new Map<string, string[]>();
+      for (const url of urls) {
+        try {
+          const canonical = canonicalJobUrl(url);
+          byCanonical.set(canonical, [...(byCanonical.get(canonical) ?? []), url]);
+        } catch {
+          // not a URL; nothing to match
+        }
+      }
+      const idByUrl = new Map<string, string>();
+      const idByPosting = new Map<string, string>();
+      for (const chunk of keyChunks([...byCanonical.keys()])) {
+        const { data, error } = await db.from("jobs").select("id, canonical_url").in("canonical_url", chunk);
+        fail(error);
+        for (const row of (data ?? []) as Array<{ id: string; canonical_url: string }>) idByUrl.set(row.canonical_url, row.id);
+      }
+      const postings = [...new Set([...byCanonical.keys()].map(postingKey).filter((key): key is string => !!key))];
+      for (const chunk of keyChunks(postings)) {
+        const { data, error } = await db.from("jobs").select("id, posting_key").in("posting_key", chunk);
+        fail(error);
+        for (const row of (data ?? []) as Array<{ id: string; posting_key: string }>) {
+          if (!idByPosting.has(row.posting_key)) idByPosting.set(row.posting_key, row.id);
+        }
+      }
+      const found = new Map<string, string>();
+      for (const [canonical, given] of byCanonical) {
+        const posting = postingKey(canonical);
+        const id = idByUrl.get(canonical) ?? (posting ? idByPosting.get(posting) : undefined);
+        if (id) for (const url of given) found.set(url, id);
+      }
+      return found;
+    },
+    async addManualJobs(inputs: ManualJobInput[]) {
+      const ids = await this.findJobIds(inputs.map((input) => input.url));
+      const now = new Date().toISOString();
+      const fresh = new Map<string, Record<string, unknown>>();
+      for (const input of inputs) {
+        if (ids.has(input.url)) continue;
+        const canonical = canonicalJobUrl(input.url);
+        const id = manualJobId(canonical);
+        ids.set(input.url, id);
+        fresh.set(id, {
+          id,
+          canonical_url: canonical,
+          title: input.title.trim(),
+          company: input.company.trim(),
+          location: null,
+          ats: "manual",
+          target_id: null,
+          external_id: null,
+          posted_at: null,
+          first_seen_at: now,
+          last_seen_at: now,
+          source_urls: [],
+          title_key: titleCacheKey(input.title),
+          alerted_at: now,
+          posting_key: postingKey(canonical),
+          role_key: roleKey(input.company, input.title),
+        });
+      }
+      for (const chunk of chunks([...fresh.values()], 200)) {
+        const { error } = await db.from("jobs").upsert(chunk, { onConflict: "id", ignoreDuplicates: true });
+        fail(error);
+      }
+      return ids;
+    },
+    async putApplications(rows) {
+      const now = new Date().toISOString();
+      for (const row of rows) {
+        if (!APPLICATION_STATUSES.includes(row.status) || !REFERRALS.includes(row.referral)) throw new Error("invalid application");
+      }
+      const records = rows.map((row) => ({
+        job_id: row.jobId,
+        status: row.status,
+        referral: row.referral,
+        notes: row.notes.slice(0, 2000),
+        updated_at: now,
+      }));
+      for (const chunk of chunks(records, 200)) {
+        const { error } = await db.from("applications").upsert(chunk, { onConflict: "job_id" });
+        fail(error);
+      }
+    },
     async listApplications() {
       const { data, error } = await db
         .from("applications")
-        .select("job_id, status, notes, updated_at, jobs(title, company, canonical_url, location, posted_at, first_seen_at)")
+        .select("job_id, status, referral, notes, updated_at, jobs(title, company, canonical_url, location, posted_at, first_seen_at)")
         .order("updated_at", { ascending: false });
       fail(error);
       type JobPart = {
@@ -532,6 +634,7 @@ export function createSupabaseStore(): Store {
       return ((data ?? []) as unknown as Array<{
         job_id: string;
         status: ApplicationStatus;
+        referral: Referral;
         notes: string;
         updated_at: string;
         jobs: JobPart | JobPart[] | null;
@@ -541,6 +644,7 @@ export function createSupabaseStore(): Store {
         return [{
           jobId: row.job_id,
           status: row.status,
+          referral: row.referral,
           notes: row.notes,
           updatedAt: row.updated_at,
           title: job.title,
@@ -557,10 +661,12 @@ export function createSupabaseStore(): Store {
       if (!job) throw new Error("unknown job");
       const status = input.status ?? "saved";
       if (!APPLICATION_STATUSES.includes(status)) throw new Error("invalid application status");
+      if (input.referral && !REFERRALS.includes(input.referral)) throw new Error("invalid referral");
       const existing = (await this.listApplications()).find((item) => item.jobId === input.jobId);
       const { error } = await db.from("applications").upsert({
         job_id: input.jobId,
         status: input.status ?? existing?.status ?? status,
+        referral: input.referral ?? existing?.referral ?? "none",
         notes: input.notes === undefined ? existing?.notes ?? "" : input.notes.slice(0, 2000),
         updated_at: new Date().toISOString(),
       });
@@ -593,13 +699,23 @@ export function createSupabaseStore(): Store {
       const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
       const tracked = await db.from("applications").select("job_id");
       fail(tracked.error);
-      const keep = ((tracked.data ?? []) as Array<{ job_id: string }>).map((row) => row.job_id);
-      let query = db.from("jobs").delete({ count: "exact" }).lt("last_seen_at", cutoff);
-      // Job ids are hex hashes, so they are safe inside the in-list.
-      if (keep.length > 0) query = query.not("id", "in", `(${keep.join(",")})`);
-      const { error, count } = await query;
-      fail(error);
-      return count ?? 0;
+      const keep = new Set(((tracked.data ?? []) as Array<{ job_id: string }>).map((row) => row.job_id));
+      // Old ids are read first and deleted in batches; one "not in" list of every tracked
+      // job would outgrow the URL length limit as applications pile up.
+      const old: string[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await db.from("jobs").select("id").lt("last_seen_at", cutoff).order("id").range(from, from + 999);
+        fail(error);
+        old.push(...((data ?? []) as Array<{ id: string }>).map((row) => row.id));
+        if ((data ?? []).length < 1000) break;
+      }
+      let deleted = 0;
+      for (const chunk of keyChunks(old.filter((id) => !keep.has(id)))) {
+        const { error, count } = await db.from("jobs").delete({ count: "exact" }).in("id", chunk);
+        fail(error);
+        deleted += count ?? 0;
+      }
+      return deleted;
     },
     async stats(): Promise<Stats> {
       const targets = await db.from("targets").select("*", { count: "exact", head: true });

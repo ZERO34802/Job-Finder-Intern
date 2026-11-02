@@ -14,6 +14,8 @@ export const ATS = [
   "list",
 ] as const;
 export type Ats = (typeof ATS)[number];
+// Jobs added by hand or imported from the application sheet have no board.
+export type JobSource = Ats | "manual";
 
 export const ROLE_FAMILIES = ["swe", "ml", "data", "research", "hardware", "quant", "product", "design", "other"] as const;
 export type RoleFamily = (typeof ROLE_FAMILIES)[number];
@@ -38,6 +40,10 @@ export const APPLICATION_STATUSES = [
   "withdrawn",
 ] as const;
 export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
+// Whether a referral was asked for or given; separate from the status.
+export const REFERRALS = ["none", "requested", "referred"] as const;
+export type Referral = (typeof REFERRALS)[number];
 
 export type SourceUrl = {
   ats: Ats;
@@ -95,7 +101,7 @@ export type Job = {
   title: string;
   company: string;
   location: string | null;
-  ats: Ats;
+  ats: JobSource;
   targetId: string | null;
   externalId: string | null;
   postedAt: string | null;
@@ -163,6 +169,7 @@ export type JobEvaluation = {
 export type Application = {
   jobId: string;
   status: ApplicationStatus;
+  referral: Referral;
   notes: string;
   updatedAt: string;
   title: string;
@@ -176,7 +183,15 @@ export type Application = {
 export type ApplicationInput = {
   jobId: string;
   status?: ApplicationStatus;
+  referral?: Referral;
   notes?: string;
+};
+
+// A job that no board has listed, added from the application sheet or by hand.
+export type ManualJobInput = {
+  company: string;
+  title: string;
+  url: string;
 };
 
 export type PollRun = {
@@ -217,6 +232,12 @@ export interface Store {
   putLocations(rows: LocationVerdict[]): Promise<void>;
   listUnalertedMatches(opts: { sinceHours: number; limit: number }): Promise<Job[]>;
   markAlerted(ids: string[]): Promise<void>;
+  // Stored job ids for these links, matched by canonical URL or posting id; keyed by the link as given.
+  findJobIds(urls: string[]): Promise<Map<string, string>>;
+  // Stores jobs that no board has listed; they never alert. Returns each one's id, keyed by its url as given.
+  addManualJobs(inputs: ManualJobInput[]): Promise<Map<string, string>>;
+  // Writes applications as given (no merging with what is stored), in bulk.
+  putApplications(rows: Array<Pick<Application, "jobId" | "status" | "referral" | "notes">>): Promise<void>;
   listApplications(): Promise<Application[]>;
   upsertApplication(input: ApplicationInput): Promise<Application>;
   deleteApplication(jobId: string): Promise<void>;

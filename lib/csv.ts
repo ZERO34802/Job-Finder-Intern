@@ -1,4 +1,5 @@
-export function parseCsv(text: string): string[][] {
+// Also reads tab-separated text (rows copied out of Google Sheets) with delimiter "\t".
+export function parseCsv(text: string, delimiter = ","): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -13,8 +14,8 @@ export function parseCsv(text: string): string[][] {
           i++;
         } else quoted = false;
       } else cell += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") {
+    } else if (c === '"' && cell.length === 0) quoted = true;
+    else if (c === delimiter) {
       row.push(cell.trim());
       cell = "";
     } else if (c === "\n" || c === "\r") {

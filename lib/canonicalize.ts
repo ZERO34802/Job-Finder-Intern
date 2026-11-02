@@ -52,8 +52,14 @@ export function companyKey(name: string): string {
 // The ATS's own id for a posting, read from its URL, so the same posting found
 // through a list feed and through its board collapses to one row.
 export function postingKey(url: string): string | null {
-  const gh = url.match(/greenhouse\.io\/.*?jobs\/(\d+)/) ?? url.match(/[?&]gh_jid=(\d+)/);
+  const gh =
+    url.match(/greenhouse\.io\/.*?jobs\/(\d+)/) ??
+    url.match(/[?&]gh_jid=(\d+)/) ??
+    url.match(/greenhouse\.io\/embed\/job_app\?.*\btoken=(\d+)/);
   if (gh) return `gh:${gh[1]}`;
+  // Company sites that embed an Ashby board link to it as ?ashby_jid=<uuid>.
+  const ashbyParam = url.match(/[?&]ashby_jid=([0-9a-f]{8}-[0-9a-f-]{27})/i);
+  if (ashbyParam) return `ashby:${ashbyParam[1].toLowerCase()}`;
   const uuid = url.match(/(jobs\.lever\.co|jobs\.ashbyhq\.com)\/[^/]+\/([0-9a-f]{8}-[0-9a-f-]{27})/i);
   if (uuid) return `${uuid[1].startsWith("jobs.lever") ? "lever" : "ashby"}:${uuid[2].toLowerCase()}`;
   const oracle = url.match(/\/\/([a-z0-9-]+)[^/]*oraclecloud\.com\/.*\/job\/(\d+)/i);
@@ -62,13 +68,18 @@ export function postingKey(url: string): string | null {
   if (amazon) return `amzn:${amazon[1]}`;
   const tiktok = url.match(/lifeattiktok\.com\/search\/(\d{12,})/);
   if (tiktok) return `tt:${tiktok[1]}`;
-  const ef = url.match(/\/careers\/job\/(\d{11,})/);
+  const ef = url.match(/\/careers\/job\/(\d{11,})/) ?? url.match(/\/careers\/job\?(?:.*&)?pid=(\d{11,})/);
   if (ef) return `ef:${ef[1]}`;
   const sr = url.match(/smartrecruiters\.com\/[^/]+\/(\d{6,})/);
   if (sr) return `sr:${sr[1]}`;
   const wd = url.match(/\/\/([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com\/.*_([A-Za-z0-9-]*\d[A-Za-z0-9-]*)(?:[/?#]|$)/i);
   if (wd) return `wd:${wd[1].toLowerCase()}:${wd[2].toLowerCase()}`;
   return null;
+}
+
+// Jobs added by hand have no board posting to hash, so their id comes from the link.
+export function manualJobId(canonicalUrl: string): string {
+  return createHash("sha256").update(`manual|${canonicalUrl}`).digest("hex").slice(0, 24);
 }
 
 export function roleKey(company: string, title: string): string {

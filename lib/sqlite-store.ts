@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { canonicalJobUrl, dedupeKey, postingKey, roleKey, titleCacheKey } from "./canonicalize";
+import { canonicalJobUrl, dedupeKey, manualJobId, postingKey, roleKey, titleCacheKey } from "./canonicalize";
 import type {
   Application,
   ApplicationInput,
@@ -13,8 +13,11 @@ import type {
   JobEvaluation,
   JobDraft,
   JobFilter,
+  JobSource,
   LocationVerdict,
+  ManualJobInput,
   PollRun,
+  Referral,
   RoleFamily,
   Season,
   Seniority,
@@ -24,7 +27,7 @@ import type {
   Target,
   TargetInput,
 } from "./types";
-import { APPLICATION_STATUSES } from "./types";
+import { APPLICATION_STATUSES, REFERRALS } from "./types";
 import { normalizeTarget } from "./targets";
 
 type TargetRow = {
@@ -50,7 +53,7 @@ type JobRow = {
   title: string;
   company: string;
   location: string | null;
-  ats: Ats;
+  ats: JobSource;
   target_id: string | null;
   external_id: string | null;
   posted_at: string | null;
@@ -198,7 +201,8 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       job_id TEXT PRIMARY KEY REFERENCES jobs (id) ON DELETE CASCADE,
       status TEXT NOT NULL,
       notes TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      referral TEXT NOT NULL DEFAULT 'none'
     );
     CREATE TABLE IF NOT EXISTS poll_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,6 +227,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
   addColumn("classifications", "degree", "TEXT");
   addColumn("jobs", "posting_key", "TEXT");
   addColumn("jobs", "role_key", "TEXT");
+  addColumn("applications", "referral", "TEXT NOT NULL DEFAULT 'none'");
   db.exec(`
     CREATE TABLE IF NOT EXISTS locations (
       cache_key TEXT PRIMARY KEY,
@@ -344,6 +349,10 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
           first_seen_at, last_seen_at, source_urls, title_key, alerted_at, posting_key, role_key
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      const adoptBoard = db.prepare(
+        `UPDATE jobs SET title = ?, company = ?, title_key = ?, ats = ?, target_id = ?, external_id = ?,
+         posted_at = COALESCE(posted_at, ?), classify_model = NULL WHERE id = ?`,
+      );
       const update = db.prepare(
         `UPDATE jobs SET last_seen_at = ?, title = ?, location = COALESCE(?, location), source_urls = ?, company = ?,
          posting_key = COALESCE(posting_key, ?), role_key = COALESCE(role_key, ?) WHERE id = ?`,
@@ -388,6 +397,10 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         } else {
           const sources = mergeSources(readSources(prev.source_urls), source);
           update.run(now, prev.title, prev.location ?? draft.location, JSON.stringify(sources), prev.company, posting, role, prev.id);
+          // A hand-added job takes the board's details the first time a board lists it.
+          if (prev.ats === "manual") {
+            adoptBoard.run(draft.title.trim(), draft.company.trim(), titleCacheKey(draft.title), draft.ats, draft.targetId, draft.externalId, draft.postedAt, prev.id);
+          }
         }
       }
       return { insertedIds };
@@ -561,10 +574,57 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       const stmt = db.prepare("UPDATE jobs SET alerted_at = ? WHERE id = ?");
       for (const id of ids) stmt.run(now, id);
     },
+    async findJobIds(urls) {
+      const found = new Map<string, string>();
+      for (const url of urls) {
+        let canonical: string;
+        try {
+          canonical = canonicalJobUrl(url);
+        } catch {
+          continue;
+        }
+        const posting = postingKey(canonical);
+        const row =
+          (getJobByUrl.get(canonical) as JobRow | undefined) ??
+          (posting ? (getJobByPosting.get(posting) as JobRow | undefined) : undefined);
+        if (row) found.set(url, row.id);
+      }
+      return found;
+    },
+    async addManualJobs(inputs: ManualJobInput[]) {
+      const ids = await this.findJobIds(inputs.map((input) => input.url));
+      const now = new Date().toISOString();
+      const insert = db.prepare(
+        `INSERT OR IGNORE INTO jobs (
+          id, canonical_url, title, company, location, ats, target_id, external_id, posted_at,
+          first_seen_at, last_seen_at, source_urls, title_key, alerted_at, posting_key, role_key
+        ) VALUES (?, ?, ?, ?, NULL, 'manual', NULL, NULL, NULL, ?, ?, '[]', ?, ?, ?, ?)`,
+      );
+      for (const input of inputs) {
+        if (ids.has(input.url)) continue;
+        const canonical = canonicalJobUrl(input.url);
+        const id = manualJobId(canonical);
+        insert.run(id, canonical, input.title.trim(), input.company.trim(), now, now, titleCacheKey(input.title), now, postingKey(canonical), roleKey(input.company, input.title));
+        ids.set(input.url, id);
+      }
+      return ids;
+    },
+    async putApplications(rows) {
+      const now = new Date().toISOString();
+      const upsert = db.prepare(
+        `INSERT INTO applications (job_id, status, referral, notes, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(job_id) DO UPDATE SET
+           status = excluded.status, referral = excluded.referral, notes = excluded.notes, updated_at = excluded.updated_at`,
+      );
+      for (const row of rows) {
+        if (!APPLICATION_STATUSES.includes(row.status) || !REFERRALS.includes(row.referral)) throw new Error("invalid application");
+        upsert.run(row.jobId, row.status, row.referral, row.notes.slice(0, 2000), now);
+      }
+    },
     async listApplications() {
       const rows = db
         .prepare(
-          `SELECT a.job_id, a.status, a.notes, a.updated_at, j.title, j.company, j.canonical_url,
+          `SELECT a.job_id, a.status, a.referral, a.notes, a.updated_at, j.title, j.company, j.canonical_url,
              j.location, j.posted_at, j.first_seen_at
            FROM applications a
            JOIN jobs j ON j.id = a.job_id
@@ -573,6 +633,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         .all() as Array<{
         job_id: string;
         status: ApplicationStatus;
+        referral: Referral;
         notes: string;
         updated_at: string;
         title: string;
@@ -585,6 +646,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       return rows.map((row) => ({
         jobId: row.job_id,
         status: row.status,
+        referral: row.referral,
         notes: row.notes,
         updatedAt: row.updated_at,
         title: row.title,
@@ -601,17 +663,25 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
       const status = input.status ?? "saved";
       if (!APPLICATION_STATUSES.includes(status)) throw new Error("invalid application status");
       const notes = (input.notes ?? "").slice(0, 2000);
-      const existing = db.prepare("SELECT notes, status FROM applications WHERE job_id = ?").get(input.jobId) as
-        | { notes: string; status: ApplicationStatus }
+      if (input.referral && !REFERRALS.includes(input.referral)) throw new Error("invalid referral");
+      const existing = db.prepare("SELECT notes, status, referral FROM applications WHERE job_id = ?").get(input.jobId) as
+        | { notes: string; status: ApplicationStatus; referral: Referral }
         | undefined;
       const now = new Date().toISOString();
       db.prepare(
-        `INSERT INTO applications (job_id, status, notes, updated_at) VALUES (?, ?, ?, ?)
+        `INSERT INTO applications (job_id, status, referral, notes, updated_at) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(job_id) DO UPDATE SET
            status = excluded.status,
+           referral = excluded.referral,
            notes = excluded.notes,
            updated_at = excluded.updated_at`,
-      ).run(input.jobId, input.status ?? existing?.status ?? status, input.notes === undefined ? existing?.notes ?? "" : notes, now);
+      ).run(
+        input.jobId,
+        input.status ?? existing?.status ?? status,
+        input.referral ?? existing?.referral ?? "none",
+        input.notes === undefined ? existing?.notes ?? "" : notes,
+        now,
+      );
       const saved = (await this.listApplications()).find((item) => item.jobId === input.jobId);
       if (!saved) throw new Error("application was not saved");
       return saved;

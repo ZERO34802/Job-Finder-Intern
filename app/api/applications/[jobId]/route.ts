@@ -1,5 +1,5 @@
 import { getStore } from "@/lib/store";
-import type { ApplicationStatus } from "@/lib/types";
+import type { ApplicationStatus, Referral } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -7,10 +7,11 @@ export const dynamic = "force-dynamic";
 export async function PATCH(request: Request, context: { params: Promise<{ jobId: string }> }) {
   try {
     const { jobId } = await context.params;
-    const body = (await request.json()) as { status?: ApplicationStatus; notes?: string };
+    const body = (await request.json()) as { status?: ApplicationStatus; referral?: Referral; notes?: string };
     const application = await getStore().upsertApplication({
       jobId: decodeURIComponent(jobId),
       status: body.status,
+      referral: body.referral,
       notes: body.notes,
     });
     return Response.json(application);

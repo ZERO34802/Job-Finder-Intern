@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import type { Application, ApplicationStatus } from "@/lib/types";
-import { APPLICATION_STATUSES } from "@/lib/types";
+import type { Application, ApplicationStatus, Referral } from "@/lib/types";
+import { APPLICATION_STATUSES, REFERRALS } from "@/lib/types";
 
 export function ApplicationTable({ applications }: { applications: Application[] }) {
   const [error, setError] = useState("");
 
-  async function save(jobId: string, status: ApplicationStatus, notes: string) {
+  async function save(jobId: string, status: ApplicationStatus, referral: Referral, notes: string) {
     setError("");
     const res = await fetch(`/api/applications/${jobId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status, notes }),
+      body: JSON.stringify({ status, referral, notes }),
     });
     const data = (await res.json().catch(() => ({}))) as { error?: string };
     if (!res.ok) {
@@ -43,6 +43,7 @@ export function ApplicationTable({ applications }: { applications: Application[]
           <tr>
             <th>Role</th>
             <th>Status</th>
+            <th>Referral</th>
             <th>Notes</th>
             <th></th>
           </tr>
@@ -63,10 +64,11 @@ function ApplicationRow({
   onRemove,
 }: {
   application: Application;
-  onSave: (jobId: string, status: ApplicationStatus, notes: string) => void;
+  onSave: (jobId: string, status: ApplicationStatus, referral: Referral, notes: string) => void;
   onRemove: (jobId: string) => void;
 }) {
   const [status, setStatus] = useState(application.status);
+  const [referral, setReferral] = useState(application.referral);
   const [notes, setNotes] = useState(application.notes);
   return (
     <tr>
@@ -86,11 +88,20 @@ function ApplicationRow({
         </select>
       </td>
       <td>
+        <select value={referral} onChange={(event) => setReferral(event.target.value as Referral)}>
+          {REFERRALS.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
         <textarea value={notes} onChange={(event) => setNotes(event.target.value)} />
       </td>
       <td>
         <div className="row-actions">
-          <button className="btn primary" type="button" onClick={() => onSave(application.jobId, status, notes)}>
+          <button className="btn primary" type="button" onClick={() => onSave(application.jobId, status, referral, notes)}>
             Save
           </button>
           <button className="btn danger" type="button" onClick={() => onRemove(application.jobId)}>

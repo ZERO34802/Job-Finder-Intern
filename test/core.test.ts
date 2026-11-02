@@ -14,6 +14,7 @@ import { importTargets, seedStarter } from "../lib/seed";
 import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
 import { isApplied, postedTime, timeAgo } from "../lib/posted";
+import { applyImport, companyFromUrl, mapSheetStatus, parseSheetRows, planImport } from "../lib/importApplications";
 import type { Target } from "../lib/types";
 
 // Keep tests off the network: no Groq key, and an Ollama URL nothing listens on.
@@ -495,4 +496,84 @@ test("applications carry posting details, keep notes when moved back, and jobs l
   const back = await store.upsertApplication({ jobId: id, status: "saved" });
   assert.equal(back.status, "saved");
   assert.equal(back.notes, "referral from Sam");
+});
+
+test("sheet statuses map to a status and a referral", () => {
+  assert.deepEqual(mapSheetStatus("Applied(no referral)"), { status: "applied", referral: "none", note: null });
+  assert.deepEqual(mapSheetStatus("Appplied(referral)"), { status: "applied", referral: "referred", note: null });
+  assert.deepEqual(mapSheetStatus("Referral requested"), { status: "applied", referral: "requested", note: null });
+  assert.equal(mapSheetStatus("Rejected").status, "rejected");
+  assert.equal(mapSheetStatus("").status, "saved");
+  assert.deepEqual(mapSheetStatus("Ghosted"), { status: "saved", referral: "none", note: "Sheet status: Ghosted" });
+  assert.equal(postingKey("https://job-boards.greenhouse.io/embed/job_app?for=figma&token=6131089004"), "gh:6131089004");
+  assert.equal(postingKey("https://commure.com/careers?ashby_jid=62841aa1-3ee5-4547-8380-637b737b2cb3"), "ashby:62841aa1-3ee5-4547-8380-637b737b2cb3");
+  assert.equal(postingKey("https://careers.qualcomm.com/careers/job?pid=446720740529"), "ef:446720740529");
+  assert.equal(companyFromUrl("https://job-boards.greenhouse.io/enova/jobs/8239619"), "Enova");
+  assert.equal(companyFromUrl("https://radiancetech.wd12.myworkdayjobs.com/Radiance_External/job/x_HR102443"), "Radiancetech");
+});
+
+test("pasted sheet rows import once, match stored jobs, and re-import without duplicates", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "intern-finder-"));
+  const store = createSqliteStore(path.join(dir, "test.db"));
+  await store.upsertJobs([
+    {
+      company: "Figma",
+      title: "Software Engineer Intern",
+      location: "San Francisco, CA",
+      url: "https://job-boards.greenhouse.io/figma/jobs/6143238004",
+      ats: "greenhouse",
+      targetId: "greenhouse:figma",
+      externalId: "6143238004",
+      postedAt: null,
+    },
+  ]);
+  const text = [
+    "Company\tRole\tJob Link\tApplication Status\tDate\tJD\tResult",
+    "Figma\tSWE Intern\thttps://job-boards.greenhouse.io/figma/jobs/6143238004?gh_jid=6143238004\tAppplied(referral)\t\t\t",
+    'Whatnot\tSWE Intern\thttps://jobs.ashbyhq.com/whatnot/928ffdca-b316-40ce-b82b-94b570919bcd/application\tApplied(no referral)\t16/08/2026\t"line one\nline two"\tBad Company',
+    "Harvey\t\thttps://jobs.ashbyhq.com/harvey/06d64648-b84b-48ae-94a2-d9c06dfdcb5d\tApplied(no referral)\t\t\t",
+    "Harvey\tSWE Intern (NYC)\thttps://jobs.ashbyhq.com/harvey/06d64648-b84b-48ae-94a2-d9c06dfdcb5d/application\tRejected\t\t\t",
+    "Ambrook\t\tnot a link\t\t\t\t",
+    "Stripe\tSWE Intern\thttps://stripe.com/careers/apply/software-engineer-intern-summer-or-winter/8128745\tApplied(no referral)\t\t\t",
+    "\t\thttps://job-boards.greenhouse.io/embed/job_app?for=stripe&token=8128745\tApplied(no referral)\t\t\t",
+  ].join("\n");
+  const plan = await planImport(store, parseSheetRows(text));
+  assert.equal(plan.rows.length, 4);
+  assert.equal(plan.skipped.length, 1);
+  assert.deepEqual(plan.rows.map((row) => row.action).sort(), ["matched job", "new job", "new job", "new job"]);
+  // A company page and its Greenhouse form with the same job number are one application.
+  assert.equal(plan.rows.filter((row) => row.company === "Stripe").length, 1);
+  const harvey = plan.rows.find((row) => row.company === "Harvey")!;
+  assert.equal(harvey.title, "SWE Intern (NYC)");
+  assert.equal(harvey.status, "rejected");
+  assert.deepEqual(await applyImport(store, plan), { saved: 4, newJobs: 3, unchanged: 0 });
+
+  const apps = await store.listApplications();
+  assert.equal(apps.length, 4);
+  const figma = apps.find((app) => app.company === "Figma")!;
+  assert.equal(figma.referral, "referred");
+  assert.equal(figma.title, "Software Engineer Intern");
+  const whatnot = apps.find((app) => app.company === "Whatnot")!;
+  assert.equal(whatnot.notes, "Date: 16/08/2026\nBad Company");
+
+  // The same paste again changes nothing.
+  const again = await planImport(store, parseSheetRows(text));
+  assert.deepEqual(await applyImport(store, again), { saved: 0, newJobs: 0, unchanged: 4 });
+  assert.equal((await store.listApplications()).length, 4);
+
+  // A board listing the hand-added posting later lands on the same job, not a new one.
+  const later = await store.upsertJobs([
+    {
+      company: "Whatnot",
+      title: "Software Engineer Intern - Summer 2027",
+      location: "Seattle, WA",
+      url: "https://jobs.ashbyhq.com/whatnot/928ffdca-b316-40ce-b82b-94b570919bcd",
+      ats: "ashby",
+      targetId: "ashby:whatnot",
+      externalId: "928ffdca-b316-40ce-b82b-94b570919bcd",
+      postedAt: null,
+    },
+  ]);
+  assert.equal(later.insertedIds.length, 0);
+  assert.equal((await store.listApplications()).find((app) => app.company === "Whatnot")?.title, "Software Engineer Intern - Summer 2027");
 });
