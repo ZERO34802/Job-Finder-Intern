@@ -13,6 +13,7 @@ import { boardFromCrawlLine, boardsFromHnComment } from "../lib/discover";
 import { importTargets, seedStarter } from "../lib/seed";
 import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
+import { isApplied, postedTime, timeAgo } from "../lib/posted";
 import type { Target } from "../lib/types";
 
 // Keep tests off the network: no Groq key, and an Ollama URL nothing listens on.
@@ -444,4 +445,54 @@ test("HN hiring posts and crawl lines yield startup boards", () => {
   });
   assert.equal(boardFromCrawlLine('{"url": "https://boards.greenhouse.io/embed/job_board"}'), null);
   assert.equal(boardFromCrawlLine("not json"), null);
+});
+
+test("posted time reads dates, Workday's relative text, and falls back to first seen", () => {
+  const firstSeenAt = "2026-10-31T12:00:00.000Z";
+  const seen = Date.parse(firstSeenAt);
+  assert.equal(postedTime({ postedAt: "2026-10-29T08:00:00Z", firstSeenAt }), Date.parse("2026-10-29T08:00:00Z"));
+  assert.equal(postedTime({ postedAt: "Posted Today", firstSeenAt }), seen);
+  assert.equal(postedTime({ postedAt: "Posted Yesterday", firstSeenAt }), seen - 86_400_000);
+  assert.equal(postedTime({ postedAt: "Posted 3 Days Ago", firstSeenAt }), seen - 3 * 86_400_000);
+  assert.equal(postedTime({ postedAt: "Posted 30+ Days Ago", firstSeenAt }), seen - 30 * 86_400_000);
+  assert.equal(postedTime({ postedAt: null, firstSeenAt }), seen);
+  assert.equal(postedTime({ postedAt: "2099-01-01", firstSeenAt }), seen);
+  const now = Date.parse("2026-11-01T12:00:00Z");
+  assert.equal(timeAgo(now - 30_000, now), "just now");
+  assert.equal(timeAgo(now - 45 * 60_000, now), "45m ago");
+  assert.equal(timeAgo(now - 5 * 3_600_000, now), "5h ago");
+  assert.equal(timeAgo(now - 3 * 86_400_000, now), "3d ago");
+  assert.equal(isApplied("saved"), false);
+  assert.equal(isApplied("applied"), true);
+  assert.equal(isApplied("interviewing"), true);
+});
+
+test("applications carry posting details, keep notes when moved back, and jobs list newest first", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "intern-finder-"));
+  const store = createSqliteStore(path.join(dir, "test.db"));
+  const draft = (n: number) => ({
+    company: "Figma",
+    title: `Software Engineer Intern ${n}`,
+    location: "San Francisco, CA",
+    url: `https://boards.greenhouse.io/figma/jobs/${n}`,
+    ats: "greenhouse" as const,
+    targetId: "greenhouse:figma",
+    externalId: String(n),
+    postedAt: "2026-10-30T00:00:00Z",
+  });
+  const first = await store.upsertJobs([draft(1)]);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await store.upsertJobs([draft(2)]);
+  const newest = await store.listJobs({ order: "newest", limit: 10 });
+  assert.deepEqual(newest.map((job) => job.title), ["Software Engineer Intern 2", "Software Engineer Intern 1"]);
+  const id = first.insertedIds[0];
+  const saved = await store.upsertApplication({ jobId: id, status: "applied", notes: "referral from Sam" });
+  assert.equal(saved.status, "applied");
+  assert.equal(saved.location, "San Francisco, CA");
+  assert.equal(saved.postedAt, "2026-10-30T00:00:00Z");
+  assert.ok(saved.firstSeenAt);
+  // Unticking Applied sets the job back to saved; its notes stay.
+  const back = await store.upsertApplication({ jobId: id, status: "saved" });
+  assert.equal(back.status, "saved");
+  assert.equal(back.notes, "referral from Sam");
 });
