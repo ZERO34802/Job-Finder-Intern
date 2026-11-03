@@ -278,7 +278,7 @@ export function createSupabaseStore(): Store {
         } catch {
           continue;
         }
-        const source: SourceUrl = { ats: draft.ats, url: canonical, targetId: draft.targetId };
+        const source: SourceUrl = { ats: draft.ats, url: canonical, targetId: draft.targetId, seenAt: now };
         const id = dedupeKey(draft.company, draft.title, draft.location);
         const same = entries.get(id) ?? entryByUrl.get(canonical);
         if (same) {

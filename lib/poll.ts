@@ -46,10 +46,10 @@ function hostKey(target: Target): string {
   return target.ats;
 }
 
-// Boards with intern postings are checked every run; quiet ones every 6 hours.
+// Boards with intern postings are checked every run; quiet ones every 2 hours.
 // 25 rather than 30 so a slightly early cron run still counts the board as due.
 const HOT_MINUTES = 25;
-const QUIET_MINUTES = 360;
+const QUIET_MINUTES = 120;
 
 export function buildLanes(targets: Target[], lanesPerSharedHost: number): Target[][] {
   const groups = new Map<string, Target[]>();

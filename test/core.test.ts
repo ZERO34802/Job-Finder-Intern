@@ -116,6 +116,14 @@ test("sqlite dedupes the same role across urls and caches a classification", asy
   assert.equal(jobs.length, 1);
   assert.equal(jobs[0].sourceUrls.length, 2);
   assert.match(jobs[0].canonicalUrl, /gh_jid=1$/);
+  // Each source keeps when it first listed the job, so the earlier finder can be told apart.
+  const [board, lever] = jobs[0].sourceUrls;
+  assert.ok(board.seenAt && lever.seenAt && board.seenAt <= lever.seenAt);
+  const again = await store.upsertJobs([
+    { company: "stripe", title: "Software Engineering Intern", location: "Remote", url: "https://jobs.lever.co/stripe/abc", ats: "lever", targetId: "lever:stripe", externalId: "abc", postedAt: null },
+  ]);
+  assert.equal(again.insertedIds.length, 0);
+  assert.equal((await store.listJobs({ q: "Software Engineering" }))[0].sourceUrls[1].seenAt, lever.seenAt);
 
   assert.equal(await evaluateJobs(store, 100, []), 1);
   const classified = await store.listJobs({ matchOnly: true, limit: 10 });

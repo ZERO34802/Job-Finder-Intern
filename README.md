@@ -27,7 +27,7 @@ cron-job.org (every 30 min) ──▶ GitHub Actions: npm run poll
 | SimplifyJobs list | `listings.json` from `SimplifyJobs/Summer2027-Internships` | Summer 2027 and undated postings |
 | vanshb03 list | `listings.json` from `vanshb03/Summer2027-Internships` | links are `go.vansh.nyc` short links |
 
-Every board link inside the lists is added as a board, which is how the board list grows. Only public endpoints are used: no logins, no LinkedIn, Indeed, or Handshake. A board that answers 404 or 422 is switched off. Boards with intern postings are polled every run, quiet ones every 6 hours.
+Every board link inside the lists is added as a board, which is how the board list grows. Only public endpoints are used: no logins, no LinkedIn, Indeed, or Handshake. A board that answers 404 or 422 is switched off. Boards with intern postings are polled every run, quiet ones every 2 hours.
 
 ## What counts as a match
 

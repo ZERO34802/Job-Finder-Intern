@@ -365,7 +365,7 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         } catch {
           continue;
         }
-        const source: SourceUrl = { ats: draft.ats, url: canonical, targetId: draft.targetId };
+        const source: SourceUrl = { ats: draft.ats, url: canonical, targetId: draft.targetId, seenAt: now };
         const id = dedupeKey(draft.company, draft.title, draft.location);
         const posting = postingKey(canonical);
         const role = roleKey(draft.company, draft.title);

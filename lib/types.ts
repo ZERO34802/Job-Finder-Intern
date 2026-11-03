@@ -49,6 +49,9 @@ export type SourceUrl = {
   ats: Ats;
   url: string;
   targetId: string;
+  // When this source first listed the job, to see whether a board or a list found it first.
+  // Missing on sources recorded before November 2026.
+  seenAt?: string;
 };
 
 export type Target = {
