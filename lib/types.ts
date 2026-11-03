@@ -249,4 +249,6 @@ export interface Store {
   // Deletes jobs no source has listed for this long, except tracked applications.
   pruneJobs(olderThanDays: number): Promise<number>;
   stats(): Promise<Stats>;
+  // Where matches first seen since then came from, for the Coverage page.
+  listMatchSources(since: string): Promise<Array<{ firstSeenAt: string; sources: SourceUrl[] }>>;
 }

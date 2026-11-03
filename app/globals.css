@@ -250,3 +250,5 @@ tr.detail .row-actions { margin-top: 8px; justify-content: flex-end; }
   .nav { flex-wrap: wrap; gap: 14px; }
   th, td { padding: 8px; }
 }
+
+.section { font-family: var(--font-display), Georgia, serif; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; margin: 28px 0 10px; }

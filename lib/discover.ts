@@ -1,7 +1,7 @@
 import type { TargetInput } from "./types";
 import { jitteredMs, sleep } from "./jitter";
 
-// Finds startup job boards the internship lists never link to. Runs weekly on its own
+// Finds job boards the internship lists never link to. Runs weekly on its own
 // (npm run discover), not inside the poll: these sources change monthly, and Common
 // Crawl's index is slow and often answers 504.
 
@@ -112,4 +112,32 @@ export async function crawlBoards(crawls = 2): Promise<{ boards: TargetInput[]; 
     }
   }
   return { boards, skipped };
+}
+
+type DirectoryEntry = { name?: string; slug?: string; ats?: string; wd?: string; site?: string; host?: string };
+
+// zshah101's list keeps a directory of the company boards it scrapes. Entries on board types
+// we poll become targets; the rest (Workable, Rippling, Breezy, ...) are left out.
+export function boardsFromDirectory(entries: DirectoryEntry[]): TargetInput[] {
+  return entries.flatMap((entry): TargetInput[] => {
+    const company = entry.name?.trim() || entry.slug || "";
+    const slug = entry.slug?.trim();
+    if (!slug) return [];
+    if (entry.ats === "greenhouse" || entry.ats === "lever" || entry.ats === "ashby" || entry.ats === "smartrecruiters") {
+      return [{ company, ats: entry.ats, boardToken: slug }];
+    }
+    if (entry.ats === "workday" && entry.wd && entry.site) {
+      return [{ company, ats: "workday", workdayHost: `${slug}.${entry.wd}.myworkdayjobs.com`, workdayTenant: slug, workdaySite: entry.site }];
+    }
+    if (entry.ats === "oracle" && entry.host && entry.site) {
+      return [{ company, ats: "oracle", workdayHost: entry.host, workdaySite: entry.site }];
+    }
+    return [];
+  });
+}
+
+export async function directoryBoards(): Promise<TargetInput[]> {
+  const url = "https://raw.githubusercontent.com/zshah101/Automated-List-Of-Summer-2027-and-Fall-2026-Tech-Internships/main/data/companies.json";
+  const entries = JSON.parse(await getText(url, 60_000)) as DirectoryEntry[];
+  return Array.isArray(entries) ? boardsFromDirectory(entries) : [];
 }

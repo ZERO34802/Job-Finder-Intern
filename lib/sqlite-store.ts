@@ -706,6 +706,12 @@ export function createSqliteStore(file = process.env.SQLITE_PATH || path.join(pr
         .run(cutoff);
       return Number(result.changes);
     },
+    async listMatchSources(since: string) {
+      const rows = db
+        .prepare("SELECT first_seen_at, source_urls FROM jobs WHERE match = 1 AND first_seen_at >= ?")
+        .all(since) as Array<{ first_seen_at: string; source_urls: string }>;
+      return rows.map((row) => ({ firstSeenAt: row.first_seen_at, sources: readSources(row.source_urls) }));
+    },
     async stats(): Promise<Stats> {
       const targets = db.prepare("SELECT COUNT(*) AS n, SUM(enabled) AS enabled FROM targets").get() as { n: number; enabled: number | null };
       const jobs = db.prepare("SELECT COUNT(*) AS n FROM jobs").get() as { n: number };

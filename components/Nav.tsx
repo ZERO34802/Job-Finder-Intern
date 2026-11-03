@@ -8,6 +8,7 @@ const LINKS = [
   ["/targets", "Boards"],
   ["/jobs", "Jobs"],
   ["/applied", "Applied"],
+  ["/coverage", "Coverage"],
 ];
 
 export function Nav() {

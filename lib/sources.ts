@@ -1,4 +1,5 @@
 import type { Ats, JobDraft, Target, TargetInput } from "./types";
+import { parseCsv } from "./csv";
 import { fetchJson, fetchText, SourceError } from "./http";
 import { jitteredMs, sleep } from "./jitter";
 
@@ -336,8 +337,10 @@ type Listing = {
   season?: string;
 };
 
-// speedyapply publishes Markdown tables (FAANG+, Quant, Other) instead of JSON. Columns
-// are found by header name because the tables do not all have the same ones.
+// speedyapply and jobbie publish Markdown tables instead of JSON. Columns are found by header
+// name because the tables do not all have the same ones: speedyapply has Position, Posting
+// (an <a href>) and Age ("3d"); jobbie has Role (with " · $40/hr" pay), Link (a Markdown link)
+// and Posted (a date).
 export function parseMarkdownListings(markdown: string, now = Date.now()): Listing[] {
   const text = (cell: string) => cell.replace(/<[^>]+>/g, "").replace(/\*\*/g, "").trim();
   const items: Listing[] = [];
@@ -354,10 +357,11 @@ export function parseMarkdownListings(markdown: string, now = Date.now()): Listi
     }
     if (columns.length === 0 || cells.every((cell) => /^-*$/.test(cell))) continue;
     const at = (name: string) => cells[columns.indexOf(name)] ?? "";
-    const url = at("posting").match(/href="([^"]+)"/)?.[1];
+    const url = at("posting").match(/href="([^"]+)"/)?.[1] ?? at("link").match(/\]\((https?:[^)\s]+)\)/)?.[1];
     const age = Number(at("age").match(/^(\d+)d$/)?.[1]);
+    const posted = /^\d{4}-\d{2}-\d{2}$/.test(at("posted")) ? Date.parse(at("posted")) : NaN;
     const company = text(at("company"));
-    const title = text(at("position"));
+    const title = text(at("position") || at("role")).replace(/\s+·\s+\$.*$/, "");
     if (!url || !company || !title) continue;
     items.push({
       id: url,
@@ -365,11 +369,36 @@ export function parseMarkdownListings(markdown: string, now = Date.now()): Listi
       company_name: company,
       url,
       locations: text(at("location")) ? [text(at("location"))] : [],
-      date_posted: Number.isFinite(age) ? Math.floor((now - age * 86_400_000) / 1000) : undefined,
+      date_posted: Number.isFinite(age)
+        ? Math.floor((now - age * 86_400_000) / 1000)
+        : Number.isFinite(posted)
+          ? Math.floor(posted / 1000)
+          : undefined,
       active: true,
     });
   }
   return items;
+}
+
+// zshah101's list is a CSV scraped from company boards, so links go straight to the posting.
+// Its season column reads "Summer 2027", "Fall 2026" or "Not stated".
+export function parseCsvListings(csv: string): Listing[] {
+  const [head = [], ...rows] = parseCsv(csv);
+  const col = (row: string[], name: string) => row[head.indexOf(name)]?.trim() ?? "";
+  return rows.flatMap((row) => {
+    const posted = Date.parse(col(row, "posted_at"));
+    const item: Listing = {
+      id: col(row, "id") || col(row, "url"),
+      title: col(row, "title"),
+      company_name: col(row, "company"),
+      url: col(row, "url"),
+      locations: col(row, "location") ? [col(row, "location")] : [],
+      date_posted: Number.isFinite(posted) ? Math.floor(posted / 1000) : undefined,
+      active: true,
+      season: col(row, "season"),
+    };
+    return item.title && item.url ? [item] : [];
+  });
 }
 
 type ListFeed = {
@@ -380,7 +409,8 @@ type ListFeed = {
 };
 
 // Community lists of open internships. SimplifyJobs and vanshb03 publish the same
-// listings.json shape; speedyapply's US internship tables are parsed from its README.
+// listings.json shape; speedyapply's and jobbie's tables are parsed from their READMEs and
+// zshah101's from a CSV.
 export const LIST_FEEDS: Record<string, ListFeed> = {
   simplify: {
     company: "SimplifyJobs list",
@@ -398,6 +428,18 @@ export const LIST_FEEDS: Record<string, ListFeed> = {
   speedyapply: {
     company: "speedyapply list",
     url: "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/README.md",
+    keep: () => true,
+    parse: (body) => parseMarkdownListings(body),
+  },
+  zshah: {
+    company: "zshah101 list",
+    url: "https://raw.githubusercontent.com/zshah101/Automated-List-Of-Summer-2027-and-Fall-2026-Tech-Internships/main/data/internships.csv",
+    keep: (item) => item.season === "Summer 2027" || item.season === "Not stated",
+    parse: (body) => parseCsvListings(body),
+  },
+  jobbie: {
+    company: "jobbie list",
+    url: "https://raw.githubusercontent.com/jobbie-bot/Summer-2027-Tech-Internships/main/README.md",
     keep: () => true,
     parse: (body) => parseMarkdownListings(body),
   },

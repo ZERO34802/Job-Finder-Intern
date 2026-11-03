@@ -8,8 +8,8 @@ import { evaluate, evaluateJobs, withRules, isCandidateTitle, ruleClassify, rule
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
-import { boardFromUrl, parseMarkdownListings } from "../lib/sources";
-import { boardFromCrawlLine, boardsFromHnComment } from "../lib/discover";
+import { boardFromUrl, parseCsvListings, parseMarkdownListings } from "../lib/sources";
+import { boardFromCrawlLine, boardsFromDirectory, boardsFromHnComment } from "../lib/discover";
 import { importTargets, seedStarter } from "../lib/seed";
 import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
@@ -584,4 +584,36 @@ test("pasted sheet rows import once, match stored jobs, and re-import without du
   ]);
   assert.equal(later.insertedIds.length, 0);
   assert.equal((await store.listApplications()).find((app) => app.company === "Whatnot")?.title, "Software Engineer Intern - Summer 2027");
+});
+
+test("jobbie tables, the zshah101 csv and its board directory are read", () => {
+  const md = [
+    "| Company | Role | Location | Posted | Link | Apply with Jobbie |",
+    "|---|---|---|---|---|:---:|",
+    '| Together AI | Systems Research Engineer Intern (Summer 2027) · $58/hr | San Francisco, California | 2026-11-03 | [Job listing](https://job-boards.greenhouse.io/togetherai/jobs/5238460007) | <a href="https://jobbie.bot/register?job=1">Apply</a> |',
+  ].join("\n");
+  const [jobbie] = parseMarkdownListings(md);
+  assert.equal(jobbie.title, "Systems Research Engineer Intern (Summer 2027)");
+  assert.equal(jobbie.url, "https://job-boards.greenhouse.io/togetherai/jobs/5238460007");
+  assert.equal(jobbie.date_posted, Date.parse("2026-11-03") / 1000);
+
+  const csv = [
+    "id,company,title,season,url,location,posted_at",
+    'wd:1,Zebra,"Software Engineer Intern, Summer",Summer 2027,https://zebra.wd1.myworkdayjobs.com/x/job/y_R1,"Lincolnshire, IL",2026-11-03',
+    "wd:2,Zebra,Data Intern,Fall 2026,https://zebra.wd1.myworkdayjobs.com/x/job/y_R2,,",
+  ].join("\n");
+  const rows = parseCsvListings(csv);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].title, "Software Engineer Intern, Summer");
+  assert.deepEqual(rows[0].locations, ["Lincolnshire, IL"]);
+  assert.equal(rows[1].season, "Fall 2026");
+  assert.equal(rows[1].date_posted, undefined);
+
+  const boards = boardsFromDirectory([
+    { name: "23andMe", slug: "23andme", ats: "workday", wd: "wd5", site: "23" },
+    { name: "Acosta", slug: "eczy.fa.us2.oraclecloud.com", ats: "oracle", host: "eczy.fa.us2.oraclecloud.com", site: "CX_1" },
+    { name: "10a Labs", slug: "10alabs", ats: "greenhouse" },
+    { name: "4AG Robotics", slug: "4ag", ats: "rippling" },
+  ]);
+  assert.deepEqual(boards.map((b) => normalizeTarget(b).id), ["workday:23andme", "oracle:eczy-cx_1", "greenhouse:10alabs"]);
 });

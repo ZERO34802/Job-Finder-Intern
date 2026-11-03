@@ -717,6 +717,23 @@ export function createSupabaseStore(): Store {
       }
       return deleted;
     },
+    async listMatchSources(since: string) {
+      const out: Array<{ firstSeenAt: string; sources: SourceUrl[] }> = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await db
+          .from("jobs")
+          .select("id, first_seen_at, source_urls")
+          .eq("match", 1)
+          .gte("first_seen_at", since)
+          .order("id")
+          .range(from, from + 999);
+        fail(error);
+        const rows = (data ?? []) as Array<{ first_seen_at: string; source_urls: SourceUrl[] | string }>;
+        for (const row of rows) out.push({ firstSeenAt: row.first_seen_at, sources: readSources(row.source_urls) });
+        if (rows.length < 1000) break;
+      }
+      return out;
+    },
     async stats(): Promise<Stats> {
       const targets = await db.from("targets").select("*", { count: "exact", head: true });
       const enabled = await db.from("targets").select("*", { count: "exact", head: true }).eq("enabled", 1);

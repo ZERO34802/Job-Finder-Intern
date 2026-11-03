@@ -2,7 +2,7 @@ name: Discover startup boards
 
 on:
   schedule:
-    # Weekly; the sources (HN "Who is hiring?" threads, Common Crawl) change monthly.
+    # Weekly; the sources (a board directory, HN "Who is hiring?" threads, Common Crawl) change slowly.
     - cron: "17 7 * * 1"
   workflow_dispatch:
 
