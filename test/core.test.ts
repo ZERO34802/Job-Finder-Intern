@@ -614,8 +614,12 @@ test("jobbie tables, the zshah101 csv and its board directory are read", () => {
     { name: "Acosta", slug: "eczy.fa.us2.oraclecloud.com", ats: "oracle", host: "eczy.fa.us2.oraclecloud.com", site: "CX_1" },
     { name: "10a Labs", slug: "10alabs", ats: "greenhouse" },
     { name: "4AG Robotics", slug: "4ag", ats: "rippling" },
+    { name: "Acme", slug: "acme", ats: "workable" },
   ]);
-  assert.deepEqual(boards.map((b) => normalizeTarget(b).id), ["workday:23andme", "oracle:eczy-cx_1", "greenhouse:10alabs"]);
+  assert.deepEqual(boards.map((b) => normalizeTarget(b).id), ["workday:23andme", "oracle:eczy-cx_1", "greenhouse:10alabs", "rippling:4ag"]);
+  assert.equal(boardFromUrl("4AG", "https://ats.rippling.com/4ag/jobs/52ac25d1")?.boardToken, "4ag");
+  assert.equal(boardFromUrl("Census", "https://census.breezy.hr/p/1da2a5-engineering-intern")?.ats, "breezy");
+  assert.equal(boardFromUrl("x", "https://app.breezy.hr/signin"), null);
 });
 
 test("yc jobs pages are read and internships keep an intern title", () => {

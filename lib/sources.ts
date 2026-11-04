@@ -288,6 +288,81 @@ export async function fetchAmazon(): Promise<RemoteJob[]> {
   return jobs;
 }
 
+type WorkableJob = {
+  id?: string;
+  title?: string;
+  url?: string;
+  created?: string;
+  locations?: string[];
+  company?: { title?: string };
+};
+
+// Workable's public job search covers every company on Workable, so it is one source rather
+// than a board per company. It ranks by relevance, not date, so every page is read.
+export async function fetchWorkable(): Promise<RemoteJob[]> {
+  const jobs = new Map<string, RemoteJob>();
+  for (const query of ["intern", "internship", "co-op"]) {
+    let token: string | undefined;
+    for (let page = 0; page < 60; page++) {
+      const params = new URLSearchParams({ query, location: "United States" });
+      if (token) params.set("pageToken", token);
+      const data = await fetchJson<{ jobs?: WorkableJob[]; nextPageToken?: string | null }>(`https://jobs.workable.com/api/v1/jobs?${params}`);
+      for (const job of data.jobs ?? []) {
+        if (!job.id || !job.title || !job.url) continue;
+        jobs.set(job.id, {
+          externalId: job.id,
+          title: job.title,
+          url: job.url,
+          location: job.locations?.length ? job.locations.join("; ") : null,
+          postedAt: job.created ?? null,
+          company: job.company?.title,
+        });
+      }
+      token = data.nextPageToken ?? undefined;
+      if (!token || !data.jobs?.length) break;
+      await sleep(jitteredMs(500, 0.3));
+    }
+  }
+  return [...jobs.values()];
+}
+
+type RipplingJob = { id?: string; name?: string; url?: string; locations?: Array<{ name?: string }> };
+
+// Rippling's board API has no posting dates, so these jobs are dated by when they are first seen.
+export async function fetchRippling(slug: string): Promise<RemoteJob[]> {
+  const jobs: RemoteJob[] = [];
+  for (let page = 0; page < 40; page++) {
+    const data = await fetchJson<{ items?: RipplingJob[]; totalPages?: number }>(
+      `https://ats.rippling.com/api/v2/board/${encodeURIComponent(slug)}/jobs?page=${page}&pageSize=50`,
+    );
+    for (const job of data.items ?? []) {
+      if (!job.id || !job.name || !job.url) continue;
+      const places = (job.locations ?? []).flatMap((place) => (place.name ? [place.name] : []));
+      jobs.push({ externalId: job.id, title: job.name.trim(), url: job.url, location: places.length ? places.join("; ") : null, postedAt: null });
+    }
+    if (page + 1 >= (data.totalPages ?? 0)) break;
+  }
+  return jobs;
+}
+
+type BreezyJob = {
+  id?: string;
+  name?: string;
+  url?: string;
+  published_date?: string;
+  location?: { name?: string; city?: string; state?: { name?: string }; country?: { name?: string } };
+};
+
+export async function fetchBreezy(slug: string): Promise<RemoteJob[]> {
+  const data = await fetchJson<BreezyJob[]>(`https://${encodeURIComponent(slug)}.breezy.hr/json`);
+  return (Array.isArray(data) ? data : []).flatMap((job): RemoteJob[] => {
+    if (!job.id || !job.name || !job.url) return [];
+    const place = job.location;
+    const location = place?.name || [place?.city, place?.state?.name, place?.country?.name].filter(Boolean).join(", ") || null;
+    return [{ externalId: job.id, title: job.name, url: job.url, location, postedAt: job.published_date ?? null }];
+  });
+}
+
 type TikTokPlace = { en_name?: string; parent?: TikTokPlace | null };
 type TikTokJob = { id?: string; title?: string; city_info?: TikTokPlace | null };
 
@@ -507,6 +582,9 @@ export function boardFromUrl(company: string, raw: string): TargetInput | null {
     return token ? { company, ats: "greenhouse", boardToken: token } : null;
   }
   if (host === "jobs.lever.co" && first) return { company, ats: "lever", boardToken: first };
+  if (host === "ats.rippling.com" && first && first !== "api") return { company, ats: "rippling", boardToken: first };
+  const breezy = host.match(/^([a-z0-9-]+)\.breezy\.hr$/);
+  if (breezy && breezy[1] !== "app" && breezy[1] !== "www") return { company, ats: "breezy", boardToken: breezy[1] };
   if (host === "jobs.ashbyhq.com" && first) return { company, ats: "ashby", boardToken: first };
   if ((host === "jobs.smartrecruiters.com" || host === "careers.smartrecruiters.com") && first) {
     return { company, ats: "smartrecruiters", boardToken: first };
@@ -579,6 +657,15 @@ export async function fetchTargetJobs(target: Target): Promise<RemoteJob[]> {
   }
   if (target.ats === "amazon") return fetchAmazon();
   if (target.ats === "tiktok") return fetchTikTok();
+  if (target.ats === "workable") return fetchWorkable();
+  if (target.ats === "rippling") {
+    if (!target.boardToken) throw new Error("rippling target is missing a board name");
+    return fetchRippling(target.boardToken);
+  }
+  if (target.ats === "breezy") {
+    if (!target.boardToken) throw new Error("breezy target is missing a board name");
+    return fetchBreezy(target.boardToken);
+  }
   if (target.ats === "yc") {
     if (!target.boardToken) throw new Error("yc target is missing a company slug");
     return fetchYc(target.boardToken);

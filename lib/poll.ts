@@ -148,11 +148,12 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
     alerted: 0,
     errors: [],
   };
-  // Lists and the single-company career sites are always present as targets.
+  // Lists, the single-company career sites and the Workable search are always present as targets.
   await store.addTargets([
     ...Object.entries(LIST_FEEDS).map(([feed, config]) => ({ company: config.company, ats: "list" as const, boardToken: feed })),
     { company: "Amazon", ats: "amazon", boardToken: "amazon" },
     { company: "TikTok", ats: "tiktok", boardToken: "tiktok" },
+    { company: "Workable", ats: "workable", boardToken: "workable" },
   ]);
   const selected = opts.targetId ? [await store.getTarget(opts.targetId)] : await store.listTargets();
   const targets = selected.filter((target) => target !== null);

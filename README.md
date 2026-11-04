@@ -24,6 +24,9 @@ cron-job.org (every 30 min) ──▶ GitHub Actions: npm run poll
 | SmartRecruiters | `api.smartrecruiters.com/v1/companies/{id}/postings?q=intern` | intern search only |
 | Eightfold | `{host}/api/apply/v2/jobs`, or the newer `{host}/api/pcsx/search` | Netflix, Qualcomm, PayPal, ...; Microsoft blocks non-browser clients, so it comes from the lists |
 | Workday | public `wday/cxs` search for intern, internship, co-op | slowest source |
+| Workable | `jobs.workable.com/api/v1/jobs` search for intern, internship, co-op in the US | one source covering every Workable company |
+| Rippling | `ats.rippling.com/api/v2/board/{name}/jobs` | no posting dates |
+| Breezy | `{name}.breezy.hr/json` | |
 | Y Combinator | each hiring YC company's public `ycombinator.com/companies/{slug}/jobs` page | YC's Internship type adds " Intern" to titles that lack it |
 | SimplifyJobs list | `listings.json` from `SimplifyJobs/Summer2027-Internships` | Summer 2027 and undated postings |
 | vanshb03 list | `listings.json` from `vanshb03/Summer2027-Internships` | links are `go.vansh.nyc` short links |

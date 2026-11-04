@@ -117,13 +117,20 @@ export async function crawlBoards(crawls = 2): Promise<{ boards: TargetInput[]; 
 type DirectoryEntry = { name?: string; slug?: string; ats?: string; wd?: string; site?: string; host?: string };
 
 // zshah101's list keeps a directory of the company boards it scrapes. Entries on board types
-// we poll become targets; the rest (Workable, Rippling, Breezy, ...) are left out.
+// we poll become targets; Workable is searched as a whole, and other types are left out.
 export function boardsFromDirectory(entries: DirectoryEntry[]): TargetInput[] {
   return entries.flatMap((entry): TargetInput[] => {
     const company = entry.name?.trim() || entry.slug || "";
     const slug = entry.slug?.trim();
     if (!slug) return [];
-    if (entry.ats === "greenhouse" || entry.ats === "lever" || entry.ats === "ashby" || entry.ats === "smartrecruiters") {
+    if (
+      entry.ats === "greenhouse" ||
+      entry.ats === "lever" ||
+      entry.ats === "ashby" ||
+      entry.ats === "smartrecruiters" ||
+      entry.ats === "rippling" ||
+      entry.ats === "breezy"
+    ) {
       return [{ company, ats: entry.ats, boardToken: slug }];
     }
     if (entry.ats === "workday" && entry.wd && entry.site) {
