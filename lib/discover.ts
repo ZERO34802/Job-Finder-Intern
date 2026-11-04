@@ -141,3 +141,20 @@ export async function directoryBoards(): Promise<TargetInput[]> {
   const entries = JSON.parse(await getText(url, 60_000)) as DirectoryEntry[];
   return Array.isArray(entries) ? boardsFromDirectory(entries) : [];
 }
+
+type YcCompany = { name?: string; slug?: string; status?: string; isHiring?: boolean };
+
+// Y Combinator companies that are active and hiring, from the public yc-oss dataset. Each is
+// polled through its ycombinator.com jobs page, where many YC startups post only.
+export function boardsFromYc(companies: YcCompany[]): TargetInput[] {
+  return companies.flatMap((company): TargetInput[] =>
+    company.status === "Active" && company.isHiring && company.slug
+      ? [{ company: company.name?.trim() || company.slug, ats: "yc", boardToken: company.slug }]
+      : [],
+  );
+}
+
+export async function ycBoards(): Promise<TargetInput[]> {
+  const companies = JSON.parse(await getText("https://yc-oss.github.io/api/companies/all.json", 120_000)) as YcCompany[];
+  return Array.isArray(companies) ? boardsFromYc(companies) : [];
+}

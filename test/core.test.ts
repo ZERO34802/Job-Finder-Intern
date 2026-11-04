@@ -8,8 +8,8 @@ import { evaluate, evaluateJobs, withRules, isCandidateTitle, ruleClassify, rule
 import { parseCsv } from "../lib/csv";
 import { jitteredMs } from "../lib/jitter";
 import { buildLanes } from "../lib/poll";
-import { boardFromUrl, parseCsvListings, parseMarkdownListings } from "../lib/sources";
-import { boardFromCrawlLine, boardsFromDirectory, boardsFromHnComment } from "../lib/discover";
+import { boardFromUrl, parseCsvListings, parseMarkdownListings, parseYcJobsPage, ycPostedAt } from "../lib/sources";
+import { boardFromCrawlLine, boardsFromDirectory, boardsFromHnComment, boardsFromYc } from "../lib/discover";
 import { importTargets, seedStarter } from "../lib/seed";
 import { normalizeTarget } from "../lib/targets";
 import { createSqliteStore } from "../lib/sqlite-store";
@@ -616,4 +616,34 @@ test("jobbie tables, the zshah101 csv and its board directory are read", () => {
     { name: "4AG Robotics", slug: "4ag", ats: "rippling" },
   ]);
   assert.deepEqual(boards.map((b) => normalizeTarget(b).id), ["workday:23andme", "oracle:eczy-cx_1", "greenhouse:10alabs"]);
+});
+
+test("yc jobs pages are read and internships keep an intern title", () => {
+  const now = Date.parse("2026-11-03T12:00:00Z");
+  const page = {
+    component: "WaasShowJobsPage",
+    props: {
+      jobPostings: [
+        { id: 1, title: "Software Engineer", type: "Internship", url: "/companies/acme/jobs/a1-software-engineer", location: "San Francisco, CA, US", createdAt: "3 days" },
+        { id: 2, title: "ML Intern & Researcher", type: "Internship", url: "/companies/acme/jobs/b2", location: null, createdAt: "about 1 hour" },
+        { id: 3, title: "Founding Engineer", type: "Full-time", url: "/companies/acme/jobs/c3", location: "Remote (US)", createdAt: "7 months" },
+      ],
+    },
+  };
+  const attr = JSON.stringify(page).replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  const jobs = parseYcJobsPage(`<div data-page="${attr}"></div>`, now);
+  assert.deepEqual(jobs.map((job) => job.title), ["Software Engineer Intern", "ML Intern & Researcher", "Founding Engineer"]);
+  assert.equal(jobs[0].url, "https://www.ycombinator.com/companies/acme/jobs/a1-software-engineer");
+  assert.equal(jobs[0].postedAt, "2026-10-31T12:00:00.000Z");
+  assert.equal(jobs[1].postedAt, "2026-11-03T11:00:00.000Z");
+  assert.equal(ycPostedAt("a month", now), new Date(now - 30 * 86_400_000).toISOString());
+  assert.equal(ycPostedAt(undefined, now), null);
+  assert.throws(() => parseYcJobsPage("<html></html>"));
+
+  const boards = boardsFromYc([
+    { name: "Acme", slug: "acme", status: "Active", isHiring: true },
+    { name: "Old", slug: "old", status: "Inactive", isHiring: true },
+    { name: "Quiet", slug: "quiet", status: "Active", isHiring: false },
+  ]);
+  assert.deepEqual(boards.map((b) => normalizeTarget(b).id), ["yc:acme"]);
 });

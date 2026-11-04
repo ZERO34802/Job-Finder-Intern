@@ -24,13 +24,14 @@ cron-job.org (every 30 min) ──▶ GitHub Actions: npm run poll
 | SmartRecruiters | `api.smartrecruiters.com/v1/companies/{id}/postings?q=intern` | intern search only |
 | Eightfold | `{host}/api/apply/v2/jobs`, or the newer `{host}/api/pcsx/search` | Netflix, Qualcomm, PayPal, ...; Microsoft blocks non-browser clients, so it comes from the lists |
 | Workday | public `wday/cxs` search for intern, internship, co-op | slowest source |
+| Y Combinator | each hiring YC company's public `ycombinator.com/companies/{slug}/jobs` page | YC's Internship type adds " Intern" to titles that lack it |
 | SimplifyJobs list | `listings.json` from `SimplifyJobs/Summer2027-Internships` | Summer 2027 and undated postings |
 | vanshb03 list | `listings.json` from `vanshb03/Summer2027-Internships` | links are `go.vansh.nyc` short links |
 | speedyapply list | README tables from `speedyapply/2027-SWE-College-Jobs` | |
 | zshah101 list | `data/internships.csv` from `zshah101/Automated-List-Of-Summer-2027-and-Fall-2026-Tech-Internships` | Summer 2027 and season-not-stated rows |
 | jobbie list | README table from `jobbie-bot/Summer-2027-Tech-Internships` | |
 
-Every board link inside the lists is added as a board, which is how the board list grows. Each Monday, `npm run discover` also adds boards from zshah101's company directory, Hacker News "Who is hiring?" threads and Common Crawl. The Coverage page shows what is checked, what is failing, and which source found recent matches. Only public endpoints are used: no logins, no LinkedIn, Indeed, or Handshake. A board that answers 404 or 422 is switched off. Boards with intern postings are polled every run, quiet ones every 2 hours.
+Every board link inside the lists is added as a board, which is how the board list grows. Each Monday, `npm run discover` also adds boards from zshah101's company directory, every active hiring Y Combinator company (yc-oss dataset), Hacker News "Who is hiring?" threads and Common Crawl. The Coverage page shows what is checked, what is failing, and which source found recent matches. Only public endpoints are used: no logins, no LinkedIn, Indeed, or Handshake. A board that answers 404 or 422 is switched off. Boards with intern postings are polled every run, quiet ones every 2 hours.
 
 ## What counts as a match
 

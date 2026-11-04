@@ -163,10 +163,10 @@ async function runPoll(opts: { targetId?: string; force?: boolean }): Promise<Po
     return target.enabled && (opts.force || isDue(target));
   });
   // Discovery can add thousands of boards at once; only so many first polls fit in one
-  // run, and the rest wait for the next runs.
+  // run, and the rest wait for the next runs. A new list is one file, so it never waits.
   const firstPollCap = envInt("NEW_BOARDS_PER_RUN", 600);
   let firstPolls = 0;
-  const due = ready.filter((target) => target.lastPolledAt || ++firstPolls <= firstPollCap);
+  const due = ready.filter((target) => target.lastPolledAt || target.ats === "list" || ++firstPolls <= firstPollCap);
   const gapMs = envInt("POLL_GAP_MS", 1200);
   const found: TargetInput[] = [];
   await runPool(buildLanes(due, envInt("POLL_HOST_LANES", 2)), envInt("POLL_CONCURRENCY", 16), async (lane) => {

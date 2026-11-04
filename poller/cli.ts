@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { crawlBoards, directoryBoards, hnBoards } from "../lib/discover";
+import { crawlBoards, directoryBoards, hnBoards, ycBoards } from "../lib/discover";
 import { envFloat, envInt, jitteredMs, sleep } from "../lib/jitter";
 import { pollTargets } from "../lib/poll";
 import { seedStarter } from "../lib/seed";
@@ -33,6 +33,8 @@ async function discover(): Promise<void> {
   const store = getStore();
   const fromDirectory = await directoryBoards();
   console.log(`zshah101 directory: ${fromDirectory.length} boards, ${await store.addTargets(fromDirectory)} new boards`);
+  const fromYc = await ycBoards();
+  console.log(`y combinator: ${fromYc.length} hiring companies, ${await store.addTargets(fromYc)} new boards`);
   const fromHn = await hnBoards();
   console.log(`hacker news: ${fromHn.length} board links, ${await store.addTargets(fromHn)} new boards`);
   const crawl = await crawlBoards();

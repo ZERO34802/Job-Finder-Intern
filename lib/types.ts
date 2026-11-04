@@ -12,6 +12,7 @@ export const ATS = [
   "amazon",
   "tiktok",
   "list",
+  "yc",
 ] as const;
 export type Ats = (typeof ATS)[number];
 // Jobs added by hand or imported from the application sheet have no board.

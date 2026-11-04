@@ -324,6 +324,51 @@ export async function fetchTikTok(): Promise<RemoteJob[]> {
   return jobs;
 }
 
+type YcJob = { id?: number; title?: string; url?: string; location?: string | null; type?: string; createdAt?: string };
+
+const AGE_UNIT_MS: Record<string, number> = { minute: 60_000, hour: 3_600_000, day: 86_400_000, week: 604_800_000, month: 2_592_000_000, year: 31_536_000_000 };
+
+// YC shows a posting's age as text ("about 1 hour", "3 days", "7 months"); this turns it into
+// an ISO date, rounded the same way YC rounds it.
+export function ycPostedAt(age: string | undefined, now = Date.now()): string | null {
+  const match = age?.match(/(an?|\d+)\s+(minute|hour|day|week|month|year)s?/i);
+  if (!match) return /less than a minute/i.test(age ?? "") ? new Date(now).toISOString() : null;
+  const count = /^an?$/i.test(match[1]) ? 1 : Number(match[1]);
+  return new Date(now - count * AGE_UNIT_MS[match[2].toLowerCase()]).toISOString();
+}
+
+// A YC company's public jobs page carries its postings as JSON in the data-page attribute.
+// YC marks internships by type, so an internship titled just "Software Engineer" gets
+// " Intern" added, because the rest of the pipeline judges internships by title.
+export function parseYcJobsPage(html: string, now = Date.now()): RemoteJob[] {
+  const raw = html.match(/data-page="([^"]+)"/)?.[1];
+  if (!raw) throw new Error("yc jobs page has no data-page");
+  const decoded = raw
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+  const postings = (JSON.parse(decoded) as { props?: { jobPostings?: YcJob[] } }).props?.jobPostings ?? [];
+  return postings.flatMap((job): RemoteJob[] => {
+    if (!job.id || !job.title || !job.url) return [];
+    const intern = job.type === "Internship" && !/\b(intern|internship|co-?op)\b/i.test(job.title);
+    return [{
+      externalId: String(job.id),
+      title: intern ? `${job.title.trim()} Intern` : job.title.trim(),
+      url: new URL(job.url, "https://www.ycombinator.com").toString(),
+      location: job.location || null,
+      postedAt: ycPostedAt(job.createdAt, now),
+    }];
+  });
+}
+
+export async function fetchYc(slug: string): Promise<RemoteJob[]> {
+  // YC answers 404 to an "accept: application/json" request, so ask for the HTML page.
+  const url = `https://www.ycombinator.com/companies/${encodeURIComponent(slug)}/jobs`;
+  return parseYcJobsPage(await fetchText(url, { headers: { accept: "text/html" } }));
+}
+
 type Listing = {
   id?: string;
   title?: string;
@@ -534,6 +579,10 @@ export async function fetchTargetJobs(target: Target): Promise<RemoteJob[]> {
   }
   if (target.ats === "amazon") return fetchAmazon();
   if (target.ats === "tiktok") return fetchTikTok();
+  if (target.ats === "yc") {
+    if (!target.boardToken) throw new Error("yc target is missing a company slug");
+    return fetchYc(target.boardToken);
+  }
   if (target.ats === "eightfold") {
     if (!target.boardToken) throw new Error("eightfold target is missing a host");
     return fetchEightfold(target.boardToken);
